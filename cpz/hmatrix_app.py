@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -534,7 +534,7 @@ class App:
                 "speed": s["speed"], "bri": s["bri"], "size": size, "bold": bold,
                 "loop": dur != -1, "dur": max(0, dur)}
         how = {0: "くりかえし", -1: "1回だけ"}.get(dur, DURS[s["dur"]][1] + "だけ")
-        self.ask("ことば", lambda: self.hub.call("POST", "/api/say", body, timeout=30),
+        self.ask("ことば", lambda: self.hub.call("POST", "/api/say", body, timeout=60),
                  lambda r: self.toast(f"流しています ({how})" + ("  ※まとめて送れず1コマずつ" if r.get("mode") == "stream" else ""),
                                       4 if r.get("mode") == "stream" else 2.5, ok=r.get("mode") != "stream"))
 

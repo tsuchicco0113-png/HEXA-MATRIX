@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.9.2"
+VERSION = "0.9.3"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -312,12 +312,12 @@ class Link:
         except ValueError:
             return False
 
-    def transfer(self, name, data, progress=None):
+    def transfer(self, name, data, progress=None, win=None):
         """FILE_BEGIN / DATA / END でファイルを送る。名前が @ で始まると本体はメモリに置いて流す (v0.6〜)
         Wi-Fi では返事を待たずに数個先まで送る (往復の待ち時間で遅くならないように)。
         USB は本体の受信バッファが小さいので1つずつ。"""
         wifi = self.kind == "wifi"
-        win = 8 if wifi else 1
+        win = win or (8 if wifi else 1)
         tmo = 8 if wifi else 4        # Wi-Fi は無線の再送で数秒遅れることがある
         n = (len(data) + CHUNK - 1) // CHUNK
         step = "開始"
@@ -565,10 +565,11 @@ class Hub:
                 raise RuntimeError("いま別の番組を送っています")
             try:
                 self.player.stop()
-                for attempt in (1, 2):                  # 失敗したら少し待ってもう1回 (遅れて届く返事を流してから)
+                # 失敗したら少し待ってやり直す。2回目からは1つずつ確かめながら送る (遅いが確実)
+                for attempt in (1, 2, 3):
                     t0 = time.time()
                     try:
-                        self.link.transfer("@live" if loop else "@once", data)
+                        self.link.transfer("@live" if loop else "@once", data, win=None if attempt == 1 else 1)
                     except RuntimeError as e:
                         log(f"clip try {attempt} failed via {self.link.kind}:", e)
                         log("  本体:", self.link.diag())
@@ -577,7 +578,11 @@ class Hub:
                     log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")
                     self.player.play(name, fr, loop, dur, clip=True)
                     return {"mode": "clip", "send_sec": round(time.time() - t0, 2)}
-                log("clip failed twice, stream instead")
+                if self.link.kind == "wifi":
+                    # v0.9.3: Wi-Fi で1コマずつ送ると届き方がばらついて点滅するので、それには落とさない
+                    log("clip failed 3 times via wifi")
+                    raise RuntimeError("Wi-Fi で本体に送れませんでした。もう一度押すか USB でつないでください")
+                log("clip failed 3 times, stream instead")
             finally:
                 self.xfer_lock.release()
         self.player.play(name, fr, loop, dur)
