@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.1 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -42,7 +42,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.0";
+static const char* FW_VER = "0.9.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -107,6 +107,7 @@ static const uint32_t CLIP_MAX = 4u * 1024 * 1024;
 static HxmUpload up;
 static bool     upRam = false;         // メモリへ受け取り中 (一時再生)
 static bool     upRamLoop = true;
+static bool     upFromNet = false;     // Wi-Fi から受け取り中
 static File     upf;
 static char     upName[48];
 static uint32_t upLastMs = 0;
@@ -340,7 +341,7 @@ static void handleFile() {
         }
         clipMode = false;                         // 書き換えるので止める
         upRam = true; upRamLoop = !(n >= 9 && memcmp(b + 4, "@once", 5) == 0);
-        up.begin(sz); upLastMs = millis();
+        up.begin(sz); upLastMs = millis(); upFromNet = (out == &client);
         out->println("{\"ok\":true,\"ack\":\"begin\"}");
         return;
       }
@@ -351,10 +352,13 @@ static void handleFile() {
       if (pf) pf.close();                         // 上書きに備えて手放す
       upf = FSYS->open(TMP, FILE_WRITE);
       if (!upf) { failUpload("open failed"); return; }
-      up.begin(sz); upLastMs = millis();
+      up.begin(sz); upLastMs = millis(); upFromNet = (out == &client);
       out->println("{\"ok\":true,\"ack\":\"begin\"}");
       return; }
     case HXM_FILE_DATA: {
+      // 受け取りが始まっていない (前の受け取りを打ち切った後に遅れて届いた残り) は黙って捨てる。
+      // ここでエラーを返すと、送り側の「次の」受け取りを失敗させてしまう (v0.9.1 で修正)
+      if (!up.active) return;
       if (n < 2) { sendErr("bad data"); return; }
       uint16_t s = hxm_u16(b);
       uint32_t off = up.got;
@@ -366,6 +370,7 @@ static void handleFile() {
       out->printf("{\"ok\":true,\"ack\":%u}\n", s);
       return; }
     case HXM_FILE_END: {
+      if (!up.active) return;                     // 同上
       if (n != 4) { sendErr("bad end"); return; }
       int r = up.finish(hxm_u32(b));
       if (upRam) {
@@ -472,6 +477,7 @@ static void netTick(uint32_t now) {
     if (nc) {                                        // 新しくつないできた方を使う (古い方は切る)
       if (client) client.stop();
       client = nc; client.setNoDelay(true); netParser.reset(); lastNetByte = now;
+      if (up.active && upFromNet) abortUpload();   // つなぎ直したら前の受け取りは無効
     }
   } else if (mdnsUp) { MDNS.end(); mdnsUp = false; }
   if (client && client.connected()) {
@@ -577,7 +583,10 @@ void loop() {
   uint32_t now = millis();
   if (!usbParser.idle() && now - lastByteMs > 300) usbParser.reset();   // 途切れたパケットは捨てる
   netTick(now);
-  if (up.active && now - upLastMs > 5000) failUpload("upload timeout");
+  if (up.active && now - upLastMs > 5000) {      // 途中で止まった受け取りは黙って捨てる (送り側は自分で時間切れにしている)
+    bool ram = upRam; abortUpload();
+    if (!ram && !paused) openProgram(cur, false);
+  }
   if (live && now - lastLiveMs > LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
     live = false;
     if (clipMode) nextAt = now; else goIdle();                     // 番組は自動で再開しない

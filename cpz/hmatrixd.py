@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.8.0"
+VERSION = "0.9.1"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -546,13 +546,18 @@ class Hub:
                 raise RuntimeError("いま別の番組を送っています")
             try:
                 self.player.stop()
-                t0 = time.time()
-                self.link.transfer("@live" if loop else "@once", data)
-                log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")
-                self.player.play(name, fr, loop, dur, clip=True)
-                return {"mode": "clip", "send_sec": round(time.time() - t0, 2)}
-            except RuntimeError as e:
-                log("clip failed, stream instead:", e)
+                for attempt in (1, 2):                  # 失敗したら少し待ってもう1回 (遅れて届く返事を流してから)
+                    t0 = time.time()
+                    try:
+                        self.link.transfer("@live" if loop else "@once", data)
+                    except RuntimeError as e:
+                        log(f"clip try {attempt} failed via {self.link.kind}:", e)
+                        time.sleep(0.5)
+                        continue
+                    log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")
+                    self.player.play(name, fr, loop, dur, clip=True)
+                    return {"mode": "clip", "send_sec": round(time.time() - t0, 2)}
+                log("clip failed twice, stream instead")
             finally:
                 self.xfer_lock.release()
         self.player.play(name, fr, loop, dur)

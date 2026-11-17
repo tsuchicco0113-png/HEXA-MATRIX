@@ -21,7 +21,9 @@ def crc8(d):
         c ^= b
         for _ in range(8): c = ((c << 1) ^ 7) & 255 if c & 128 else (c << 1) & 255
     return c
+DELAY = float(sys.argv[sys.argv.index("--delay") + 1]) / 1000 if "--delay" in sys.argv else 0   # 返事の遅れ (Wi-Fi のまね)
 def out(j):
+    if DELAY: time.sleep(DELAY)
     try: os.write(m, (json.dumps(j) + "\n").encode())
     except (OSError, TypeError): pass
 def status(): out({"ok": True, "dev": "corematrix", "fw": "0.6.0", "bri": liveBri, "rot": rot, "frames": stats["frames"],
@@ -47,12 +49,12 @@ def handle(t, p):
         up = {"name": n, "size": sz, "seq": 0, "data": bytearray()}; out({"ok": True, "ack": "begin"})
     elif t == 0x11:
         sq = struct.unpack_from("<H", p)[0]
-        if not up: return err("not started")
+        if not up: return                      # v0.9.1: 始まっていない受け取りの残りは黙って捨てる
         if sq != up["seq"]: up = None; return err("seq")
         up["data"] += p[2:]; up["seq"] = (sq + 1) & 0xFFFF; out({"ok": True, "ack": sq})
     elif t == 0x12:
         c = struct.unpack_from("<I", p)[0]
-        if not up: return err("not started")
+        if not up: return
         if len(up["data"]) != up["size"]: up = None; return err("size")
         if zlib.crc32(bytes(up["data"])) != c: up = None; return err("crc")
         if up.get("ram"):
