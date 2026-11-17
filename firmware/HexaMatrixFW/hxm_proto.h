@@ -14,7 +14,9 @@
 //        0x12 FILE_END   len=4    u32 CRC-32 (zlib と同じ)
 //        0x13 LIST       len=0    本体の番組一覧を返す
 //        0x14 DELETE     len=n    ファイル名
-//        0x15 PLAY       len=1    番組の番号 (0から)。0xFF は一時停止
+//        0x15 PLAY       len=1    番組の番号 (0から)。0xFF は一時停止、0xFE は一時再生をやめて番組へ (v0.6)
+//   ---- 一時再生 (v0.6) ----
+//        FILE_BEGIN の名前を "@live" (くりかえし) / "@once" (1回) にすると、保存せずメモリに置いて流す
 #pragma once
 #include <stdint.h>
 

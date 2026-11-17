@@ -1,11 +1,11 @@
-# HEXA MATRIX (v0.5)
+# HEXA MATRIX (v0.6)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
 | ファイル | 役割 |
 |---|---|
 | `hexa-matrix-studio.html` | STUDIO。「マークを作る」と「番組を作る」の2画面。USBで実機に映す |
-| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.5。microSD の番組を自分で流す。USBで届いたコマも表示する |
+| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.6。microSD の番組を自分で流す。USBで届いたコマも表示する |
 | `cpz/` | CardputerZero 用。常駐ハブ (`hmatrixd.py`)、本体アプリ (`hmatrix_app.py`)、描画エンジンの Python 版 (`hxengine.py`) |
 | `src/` `build.py` | STUDIO の元ファイル。`python3 build.py` で1枚のHTMLに組み立てる |
 | `tools/mkfont.py` | ドットフォント (BDF) をSTUDIO用の表に変換する |
@@ -60,6 +60,19 @@ name=hexamatrix
 - CPZ のハブは USB が無ければ Wi-Fi の CoreMatrix を探します。両方あるときは USB を使います
 - wifi.txt は起動したときだけ読みます。CPZ と CoreMatrix は同じ Wi-Fi (同じルーター) につないでください
 - 別の名前にしたときは CPZ 側で `sudo systemctl edit hexa-matrix` → `Environment=HMATRIX_NET=名前.local` (IPアドレスでも可)
+
+### CPZ から流すときの仕組み (v0.6)
+
+CPZ の「ことば」「ライブラリ → CPZから流す」は、1コマずつ送るのではなく、コマ列 (.hxm) をまとめて本体のメモリへ送り、
+本体が自分の時計で流します (保存はしません)。
+
+- Wi-Fi で1コマずつ送ると、届く間隔がばらついてカクつく / 途切れて本体の番組と混ざる、を避けるため
+- 流している間は本体の番組を止めます。長さの指定が来たとき・CPZで止めたとき・本体のボタンを押したとき・USBでコマが届いたときに番組へ戻ります
+- 送り方は同じファイル転送 (0x10〜0x12) で、名前を `@live` (くりかえし) / `@once` (1回) にするだけ。PLAY `0xFE` で番組へ戻る
+- Wi-Fi では返事を待たずに8個先まで送るので、80KB 程度の番組でもすぐ始まります
+- ファーム v0.6 から Wi-Fi の省電力を切っています (入れたままだと受信が100ms単位でまとめて届く)
+- ファームが v0.5 以前なら、これまでどおり1コマずつ送ります
+- STUDIO の「実機にも流す」(ブラウザからのプレビュー) は今までどおり1コマずつです
 
 ## CardputerZero で使う
 
@@ -124,7 +137,7 @@ CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブ
 | 0x12 FILE_END | 4 | u32 CRC-32。合えば `{"ok":true,"saved":名前,"idx":番号}` |
 | 0x13 LIST | 0 | 番組一覧 `{"ok":true,"list":true,"store","sd","free"(KB),"cur","paused","files":[{"n","s"}]}` |
 | 0x14 DELETE | n | ファイル名 |
-| 0x15 PLAY | 1 | 番組の番号 (0から)。0xFF で一時停止 |
+| 0x15 PLAY | 1 | 番組の番号 (0から)。0xFF で一時停止、0xFE で一時再生をやめて番組へ (v0.6) |
 
 本体からの返事は1行ずつのJSONです。v0.4 から PING と LIST の返事に `"sd"` (`ok` / `unreadable` = カードが読めない / `none`) が、v0.5 から PING に `"wifi"` (`ok` / `connecting` / `off`)・`"ip"`・`"name"` が入ります。
 Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。

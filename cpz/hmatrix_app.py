@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -531,7 +531,7 @@ class App:
                 "speed": s["speed"], "bri": s["bri"], "size": size, "bold": bold,
                 "loop": dur != -1, "dur": max(0, dur)}
         how = {0: "くりかえし", -1: "1回だけ"}.get(dur, DURS[s["dur"]][1] + "だけ")
-        self.ask("ことば", lambda: self.hub.call("POST", "/api/say", body),
+        self.ask("ことば", lambda: self.hub.call("POST", "/api/say", body, timeout=30),
                  lambda r: self.toast(f"流しています ({how})"))
 
     def save(self):
@@ -554,7 +554,7 @@ class App:
             elif val == "ENTER":
                 it = self.lib[self.lib_i]; m = self.lib_menu; self.lib_menu = None
                 if m in (0, 1):
-                    self.ask("再生", lambda: self.hub.call("POST", "/api/play", {"name": it["name"], "loop": m == 0}),
+                    self.ask("再生", lambda: self.hub.call("POST", "/api/play", {"name": it["name"], "loop": m == 0}, timeout=120),
                              lambda r: self.toast("CPZから流しています"))
                 elif m == 2:
                     self.ask("本体へ送る", lambda: self.hub.call("POST", "/api/push", {"name": it["name"]}, timeout=180),

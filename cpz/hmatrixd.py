@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -278,31 +278,74 @@ class Link:
             except OSError:
                 return False
 
-    def request(self, data, pred, timeout=3.0):
-        """返事を待つ。待ちは送る前に登録する (速い返事の取りこぼし対策)"""
+    def expect(self, pred):
+        """返事の待ちを登録する (送る前に呼ぶ。速い返事の取りこぼし対策)"""
         w = {"pred": pred, "ev": threading.Event(), "res": None, "err": None}
         with self.wait_lock:
             self.waiters.append(w)
-        if not self.send(data):
-            with self.wait_lock:
-                if w in self.waiters:
-                    self.waiters.remove(w)
-            raise RuntimeError("本体がつながっていません")
+        return w
+
+    def forget(self, w):
+        with self.wait_lock:
+            if w in self.waiters:
+                self.waiters.remove(w)
+
+    def wait(self, w, timeout=3.0):
         if not w["ev"].wait(timeout):
-            with self.wait_lock:
-                if w in self.waiters:
-                    self.waiters.remove(w)
+            self.forget(w)
             raise RuntimeError("本体から返事がありません")
         if w["err"]:
             raise RuntimeError(ERR_TEXT.get(w["err"], w["err"]))
         return w["res"]
+
+    def request(self, data, pred, timeout=3.0):
+        """送って返事を待つ"""
+        w = self.expect(pred)
+        if not self.send(data):
+            self.forget(w)
+            raise RuntimeError("本体がつながっていません")
+        return self.wait(w, timeout)
+
+    def fw_at_least(self, *ver):
+        try:
+            return tuple(int(x) for x in str(self.status.get("fw", "0")).split(".")[:3]) >= ver
+        except ValueError:
+            return False
+
+    def transfer(self, name, data, progress=None):
+        """FILE_BEGIN / DATA / END でファイルを送る。名前が @ で始まると本体はメモリに置いて流す (v0.6〜)
+        Wi-Fi では返事を待たずに数個先まで送る (往復の待ち時間で遅くならないように)。
+        USB は本体の受信バッファが小さいので1つずつ。"""
+        win = 8 if self.kind == "wifi" else 1
+        self.request(packet(T_BEGIN, struct.pack("<I", len(data)) + name.encode()),
+                     lambda j: j.get("ack") == "begin", 4)
+        pend = []
+        try:
+            for seq, off in enumerate(range(0, len(data), CHUNK)):
+                s = seq & 0xFFFF
+                w = self.expect(lambda j, s=s: j.get("ack") == s)
+                pend.append(w)
+                if not self.send(packet(T_DATA, struct.pack("<H", s) + data[off:off + CHUNK])):
+                    raise RuntimeError("本体がつながっていません")
+                if len(pend) >= win:
+                    self.wait(pend.pop(0), 4)
+                if progress:
+                    progress(min(len(data), off + CHUNK))
+            while pend:
+                self.wait(pend.pop(0), 4)
+        finally:
+            for w in pend:
+                self.forget(w)
+        return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
+                            lambda j: "saved" in j or "clip" in j, 8)
 
 
 ERR_TEXT = {"no storage": "保存先がありません", "bad name": "ファイル名が使えません", "no space": "空きが足りません",
             "seq": "順番が乱れました", "too big": "大きさが合いません", "crc": "中身が壊れました",
             "size": "大きさが合いません", "open failed": "ファイルを作れません", "write failed": "書き込めません",
             "rename failed": "名前を付けられません", "not found": "見つかりません",
-            "upload timeout": "途中で止まりました",
+            "upload timeout": "途中で止まりました", "no memory": "本体のメモリが足りません",
+            "bad clip": "コマ列の形が違います",
             "unknown type": "本体のファームが古いです。v0.3.0 以上を書き込んでください"}
 
 
@@ -319,35 +362,41 @@ class Player:
         self.frame = bytes(32)       # いま出している絵 (本体アプリのプレビュー用)
         self.bri = None
 
-    def play(self, name, frames, loop=True, dur=None):
-        """dur: 流す秒数 (くりかえしの途中でも、時間が来たら止める)。None ならずっと"""
+    def play(self, name, frames, loop=True, dur=None, clip=False):
+        """dur: 流す秒数 (くりかえしの途中でも、時間が来たら止める)。None ならずっと
+        clip=True: 本体がメモリのコマ列を自分で流している (v0.6〜)。ここはプレビュー用に
+        同じ時間で追いかけるだけで送らない。時間切れ・停止の時だけ本体に「番組へ戻れ」を送る"""
         if not frames:
             raise ValueError("コマがありません")
         with self.lock:
             self.gen += 1
             self.job = {"name": name, "frames": frames, "loop": loop, "total": sum(f[0] for f in frames),
-                        "until": time.monotonic() + dur if dur else None}
+                        "until": time.monotonic() + dur if dur else None, "clip": clip}
             self.pos = 0
             g = self.gen
         threading.Thread(target=self._run, args=(g,), daemon=True).start()
 
-    def stop(self):
+    def stop(self, tell_device=True):
         with self.lock:
+            job = self.job
             self.gen += 1
             self.job = None
+        if job and job.get("clip") and tell_device:
+            self.link.send(packet(T_PLAY, [0xFE]))     # 一時再生をやめて番組へ
 
     def state(self):
         j = self.job
         if not j:
             return {"playing": False}
         out = {"playing": True, "name": j["name"], "loop": j["loop"], "frames": len(j["frames"]),
-               "sec": round(j["total"] / 1000, 1), "pos": self.pos}
+               "sec": round(j["total"] / 1000, 1), "pos": self.pos, "clip": bool(j.get("clip"))}
         if j.get("until"):
             out["left"] = max(0, int(j["until"] - time.monotonic() + 0.99))
         return out
 
     def _run(self, g):
         job = self.job
+        tx = not job.get("clip")
         last_f, last_b, last_tx = None, None, 0
         t = time.monotonic()
         while self.gen == g:
@@ -357,9 +406,9 @@ class Player:
                 if job["until"] and time.monotonic() >= job["until"]:
                     break
                 self.pos = i
-                if bri != last_b:
+                if tx and bri != last_b:
                     self.link.send(packet(T_BRIGHT, [bri])); last_b = bri
-                if fb != last_f:
+                if tx and fb != last_f:
                     self.link.send(packet(T_FRAME, fb)); last_f = fb; last_tx = time.monotonic()
                 self.frame, self.bri = fb, bri
                 t += ms / 1000
@@ -367,16 +416,20 @@ class Player:
                     now = time.monotonic()
                     if now >= t:
                         break
-                    if now - last_tx >= KEEPALIVE:
+                    if tx and now - last_tx >= KEEPALIVE:
                         self.link.send(packet(T_FRAME, fb)); last_tx = now
                     time.sleep(min(t - now, 0.05, max(0.001, KEEPALIVE - (now - last_tx))))
                 if time.monotonic() - t > 0.5:          # 大きく遅れたら追いつこうとしない
                     t = time.monotonic()
             if not job["loop"] or (job["until"] and time.monotonic() >= job["until"]):
                 break
+        timed_out = bool(job["until"]) and time.monotonic() >= job["until"]
         with self.lock:
-            if self.gen == g:
+            mine = self.gen == g
+            if mine:
                 self.job = None
+        if mine and job.get("clip") and (timed_out or job["loop"]):
+            self.link.send(packet(T_PLAY, [0xFE]))     # 時間が来たので本体を番組へ戻す
 
 
 # ------------------------------------------------------------------ ハブ本体
@@ -388,6 +441,7 @@ class Hub:
         self.player = Player(link)
         self.busy = None             # 本体へ送っている最中 {"name","done","total"}
         self.busy_lock = threading.Lock()
+        self.xfer_lock = threading.Lock()   # ファイル転送は同時に1つだけ
         self.web_last = 0.0          # ブラウザ(ws)から最後に送られた時刻
         self.last_say = None
 
@@ -468,9 +522,30 @@ class Hub:
             raise ValueError("見つかりません")
 
     # ---- 流す
-    def play_lib(self, name, loop=True):
+    def play_lib(self, name, loop=True, dur=None):
         name, data = self.lib_read(name)
-        self.player.play(name, H.parse_hxm(data), loop)
+        return self.play_data(name, data, loop, dur)
+
+    def play_data(self, name, data, loop=True, dur=None):
+        """CPZ から流す。ファーム v0.6 以上ならコマ列をまとめて本体のメモリへ送り、本体の時計で流してもらう
+        (1コマずつ送ると、特に Wi-Fi では届き方がばらついてカクつく / 本体の番組と混ざる)"""
+        fr = H.parse_hxm(data)
+        if self.link.connected and self.link.fw_at_least(0, 6, 0) and len(data) <= 4 * 1024 * 1024:
+            if not self.xfer_lock.acquire(timeout=10):
+                raise RuntimeError("いま別の番組を送っています")
+            try:
+                self.player.stop()
+                t0 = time.time()
+                self.link.transfer("@live" if loop else "@once", data)
+                log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")
+                self.player.play(name, fr, loop, dur, clip=True)
+                return {"mode": "clip", "send_sec": round(time.time() - t0, 2)}
+            except RuntimeError as e:
+                log("clip failed, stream instead:", e)
+            finally:
+                self.xfer_lock.release()
+        self.player.play(name, fr, loop, dur)
+        return {"mode": "stream"}
 
     def say(self, opt):
         text = str(opt.get("text") or "").strip()
@@ -481,14 +556,14 @@ class Hub:
                          hold=opt.get("hold") or 2, loops=1, eff=opt.get("eff") or "none",
                          bold=bool(opt.get("bold")))
         frames = H.render_program([sc])
-        fr = [(f.ms, f.bri, H.to_bytes(f.b)) for f in frames]
+        data = H.bake_bin(frames)
         self.last_say = sc
         try:
             dur = float(opt.get("dur") or 0)
         except (TypeError, ValueError):
             dur = 0
-        self.player.play("ことば: " + text[:20], fr, opt.get("loop", True) and dur >= 0, dur if dur > 0 else None)
-        return {"frames": len(fr), "sec": round(sum(x[0] for x in fr) / 1000, 1)}
+        r = self.play_data("ことば: " + text[:20], data, opt.get("loop", True) and dur >= 0, dur if dur > 0 else None)
+        return dict(r, frames=len(frames), sec=round(sum(f.ms for f in frames) / 1000, 1))
 
     # ---- 本体 (CoreMatrix) の番組
     def dev_list(self):
@@ -512,20 +587,15 @@ class Hub:
             if self.busy:
                 raise RuntimeError("いま別の番組を送っています")
             self.busy = {"name": dn, "done": 0, "total": len(data)}
+        if not self.xfer_lock.acquire(timeout=10):
+            with self.busy_lock:
+                self.busy = None
+            raise RuntimeError("いま別の番組を送っています")
         try:
             self.player.stop()
             time.sleep(0.12)
-            L = self.link
             t0 = time.time()
-            L.request(packet(T_BEGIN, struct.pack("<I", len(data)) + dn.encode()),
-                      lambda j: j.get("ack") == "begin", 4)
-            for seq, off in enumerate(range(0, len(data), CHUNK)):
-                s = seq & 0xFFFF
-                L.request(packet(T_DATA, struct.pack("<H", s) + data[off:off + CHUNK]),
-                          lambda j, s=s: j.get("ack") == s, 4)
-                self.busy["done"] = min(len(data), off + CHUNK)
-            j = L.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
-                          lambda j: "saved" in j, 8)
+            j = self.link.transfer(dn, data, lambda n: self.busy.__setitem__("done", n))
             log(f"pushed {dn} {len(data)}B {time.time() - t0:.1f}s")
             try:
                 self.dev_list()
@@ -534,6 +604,7 @@ class Hub:
             return {"saved": j.get("saved"), "idx": j.get("idx"), "size": len(data),
                     "sec": round(time.time() - t0, 1)}
         finally:
+            self.xfer_lock.release()
             with self.busy_lock:
                 self.busy = None
 
@@ -730,8 +801,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dict(ok=True, **HUB.lib_save(name, None, self._body())))
             j = self._json()
             if path == "/api/play":
-                HUB.play_lib(j.get("name"), j.get("loop", True))
-                return self._send(200, HUB.status())
+                dur = float(j.get("dur") or 0)
+                r = HUB.play_lib(j.get("name"), j.get("loop", True), dur if dur > 0 else None)
+                return self._send(200, dict(HUB.status(), **r))
             if path == "/api/stop":
                 HUB.player.stop()
                 return self._send(200, HUB.status())
@@ -797,7 +869,9 @@ class Handler(BaseHTTPRequestHandler):
                 op, data = m
                 if op == 2 and data:
                     if HUB.player.job:
-                        HUB.player.stop()            # ブラウザから送り始めたら CPZ の再生は止める
+                        # ブラウザから送り始めたら CPZ の再生は止める。本体の一時再生は、
+                        # ブラウザのコマが届けば本体が自分でやめるので、ここでは何も送らない
+                        HUB.player.stop(tell_device=False)
                     HUB.web_last = time.time()
                     if not HUB.link.send(data):
                         ws.send(json.dumps({"ok": False, "hub": "cpz", "err": "本体がつながっていません"}, ensure_ascii=False))

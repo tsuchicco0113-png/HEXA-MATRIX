@@ -24,7 +24,7 @@ def crc8(d):
 def out(j):
     try: os.write(m, (json.dumps(j) + "\n").encode())
     except (OSError, TypeError): pass
-def status(): out({"ok": True, "dev": "corematrix", "fw": "0.4.0", "bri": liveBri, "rot": rot, "frames": stats["frames"],
+def status(): out({"ok": True, "dev": "corematrix", "fw": "0.6.0", "bri": liveBri, "rot": rot, "frames": stats["frames"],
                    "store": "sd", "sd": "ok", "n": len(FILES), "cur": cur, "paused": paused, "live": live, "master": 4, "wifi": "ok" if TCP else "off", "ip": "", "name": "hexamatrix"})
 def names(): return sorted(FILES)
 def lst(): out({"ok": True, "list": True, "store": "sd", "sd": "ok", "free": 1000000, "cur": cur, "paused": paused,
@@ -41,6 +41,8 @@ def handle(t, p):
     elif t == 4: rot = p[0] & 3; status()
     elif t == 0x10:
         sz = struct.unpack_from("<I", p)[0]; n = p[4:].decode()
+        if n.startswith("@"):
+            up = {"name": n, "size": sz, "seq": 0, "data": bytearray(), "ram": True}; out({"ok": True, "ack": "begin"}); return
         if not re.fullmatch(r"[A-Za-z0-9_\-.]{1,40}", n): return err("bad name")
         up = {"name": n, "size": sz, "seq": 0, "data": bytearray()}; out({"ok": True, "ack": "begin"})
     elif t == 0x11:
@@ -53,6 +55,11 @@ def handle(t, p):
         if not up: return err("not started")
         if len(up["data"]) != up["size"]: up = None; return err("size")
         if zlib.crc32(bytes(up["data"])) != c: up = None; return err("crc")
+        if up.get("ram"):
+            d = bytes(up["data"]); cnt = struct.unpack_from("<I", d, 4)[0]
+            open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} CLIP {up['name']} {cnt} {len(d)}\n")
+            open("/tmp/fakecm_clip.hxm", "wb").write(d)
+            out({"ok": True, "clip": cnt, "loop": up["name"] == "@live"}); up = None; return
         FILES[up["name"]] = bytes(up["data"]); open("/tmp/fakecm_" + up["name"], "wb").write(up["data"])
         idx = names().index(up["name"]); cur = idx; live = False; paused = False
         out({"ok": True, "saved": up["name"], "idx": idx}); up = None
@@ -62,7 +69,8 @@ def handle(t, p):
         if n in FILES: del FILES[n]; lst()
         else: err("not found")
     elif t == 0x15:
-        if p[0] == 0xFF: paused = True
+        if p[0] == 0xFE: open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} STOPCLIP\n")
+        elif p[0] == 0xFF: paused = True
         else: paused = False; live = False; cur = p[0] % max(1, len(FILES))
         status()
     else: err("unknown type")

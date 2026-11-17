@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.5.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.6.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -21,6 +21,10 @@
 //   パスワードは本体に覚えさせて、ファイルは pass=***** に書き換える。つながると「W」が一瞬出る。
 //   TCP 7800 番で USB と同じパケットを受ける (CPZ からは <name>.local で見つける)。返事は来た側へ返す。
 //
+//   一時再生 (v0.6): ファイル名 "@live" (くりかえし) / "@once" (1回) で送ると、保存せずにメモリに置いて
+//   本体の時計で流す。Wi-Fi で1コマずつ流すと届き方がばらついてカクつくため、CPZ はこちらを使う。
+//   流している間は番組を止める。PLAY 0xFE / ボタン / USB のコマ で番組に戻る。
+//
 //   起動時やカードを入れた時に「SD」と出たら、カードが読めていない (exFAT など)。
 //   FAT32 でフォーマットし直すと使える (一度読めたカードで「入っている」状態を覚える)。
 #include <M5Unified.h>
@@ -34,7 +38,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.5.0";
+static const char* FW_VER = "0.6.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -88,8 +92,16 @@ static bool     live = false;
 static uint32_t lastLiveMs = 0;
 static uint8_t  liveBri = 128;
 
+// 一時再生 (メモリに置いたコマ列)
+static uint8_t* clipBuf = nullptr;
+static uint32_t clipCap = 0, clipCount = 0, clipIdx = 0;
+static bool     clipMode = false, clipLoop = true;
+static const uint32_t CLIP_MAX = 4u * 1024 * 1024;
+
 // 受け取り
 static HxmUpload up;
+static bool     upRam = false;         // メモリへ受け取り中 (一時再生)
+static bool     upRamLoop = true;
 static File     upf;
 static char     upName[48];
 static uint32_t upLastMs = 0;
@@ -143,11 +155,12 @@ static void sendStatus() {
   out->printf("{\"ok\":true,\"dev\":\"corematrix\",\"fw\":\"%s\",\"bri\":%u,\"rot\":%u,"
                 "\"frames\":%lu,\"rx_ok\":%lu,\"rx_bad\":%lu,\"draw_us\":%lu,"
                 "\"store\":\"%s\",\"sd\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u,"
-                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\"}\n",
+                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s}\n",
                 FW_VER, liveBri, rot, (unsigned long)frames,
                 (unsigned long)(usbParser.ok + netParser.ok), (unsigned long)(usbParser.bad + netParser.bad), (unsigned long)lastDrawUs,
                 store, sdState(), nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1,
-                wifiState(), wifiOn && WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "", wName);
+                wifiState(), wifiOn && WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "", wName,
+                clipMode ? "true" : "false");
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -258,17 +271,58 @@ static void playTick() {
 // ---------------------------------------------------------------- 受け取り
 static void abortUpload() {
   if (upf) upf.close();
-  if (FSYS && FSYS->exists(TMP)) FSYS->remove(TMP);
-  up.active = false;
+  if (!upRam && FSYS && FSYS->exists(TMP)) FSYS->remove(TMP);
+  up.active = false; upRam = false;
 }
 static bool openProgram(int i, bool announce);
 /// 受け取りをやめて、流していた番組に戻る
-static void failUpload(const char* e) { abortUpload(); openProgram(cur, false); sendErr(e); }
+static void failUpload(const char* e) {
+  bool ram = upRam;
+  abortUpload();
+  if (!ram) openProgram(cur, false);     // メモリへの受け取りなら番組はそのまま
+  sendErr(e);
+}
+static void clipStop() { if (clipMode) { clipMode = false; if (pf) nextAt = millis(); else openProgram(cur, false); } }
+static void clipTick() {
+  if (!clipMode || live) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - holdUntil) < 0 || (int32_t)(now - nextAt) < 0) return;
+  if (clipIdx >= clipCount) {
+    if (!clipLoop) { clipStop(); return; }
+    clipIdx = 0;
+  }
+  const uint8_t* r = clipBuf + 8 + clipIdx * 35;
+  clipIdx++;
+  memcpy(frame, r + 3, 32);
+  setOut(playBri(r[2]));
+  drawFrame();
+  needRestore = false;
+  uint16_t ms = hxm_u16(r);
+  nextAt += ms;
+  if ((int32_t)(now - nextAt) > 500) nextAt = now + ms;
+}
 static void handleFile() {
   const uint8_t* b = pk->buf; uint8_t n = pk->len;
   switch (pk->type) {
     case HXM_FILE_BEGIN: {
       abortUpload();
+      if (n >= 5 && b[4] == '@') {                // 一時再生: メモリに受け取る
+        uint32_t sz = hxm_u32(b);
+        if (sz < 8 || sz > CLIP_MAX) { sendErr("too big"); return; }
+        if (clipCap < sz) {
+          clipMode = false;
+          if (clipBuf) free(clipBuf);
+          clipBuf = (uint8_t*)ps_malloc(sz);
+          if (!clipBuf) clipBuf = (uint8_t*)malloc(sz);
+          clipCap = clipBuf ? sz : 0;
+          if (!clipBuf) { sendErr("no memory"); return; }
+        }
+        clipMode = false;                         // 書き換えるので止める
+        upRam = true; upRamLoop = !(n >= 9 && memcmp(b + 4, "@once", 5) == 0);
+        up.begin(sz); upLastMs = millis();
+        out->println("{\"ok\":true,\"ack\":\"begin\"}");
+        return;
+      }
       if (!FSYS) { sendErr("no storage"); return; }
       if (n < 5 || !hxm_safe_name(b + 4, n - 4, upName, sizeof upName)) { sendErr("bad name"); return; }
       uint32_t sz = hxm_u32(b);
@@ -282,15 +336,27 @@ static void handleFile() {
     case HXM_FILE_DATA: {
       if (n < 2) { sendErr("bad data"); return; }
       uint16_t s = hxm_u16(b);
+      uint32_t off = up.got;
       int r = up.data(s, b + 2, n - 2);
       if (r) { failUpload(r == 1 ? "seq" : r == 2 ? "too big" : "not started"); return; }
-      if (upf.write(b + 2, n - 2) != (size_t)(n - 2)) { failUpload("write failed"); return; }
+      if (upRam) memcpy(clipBuf + off, b + 2, n - 2);
+      else if (upf.write(b + 2, n - 2) != (size_t)(n - 2)) { failUpload("write failed"); return; }
       upLastMs = millis();
       out->printf("{\"ok\":true,\"ack\":%u}\n", s);
       return; }
     case HXM_FILE_END: {
       if (n != 4) { sendErr("bad end"); return; }
       int r = up.finish(hxm_u32(b));
+      if (upRam) {
+        upRam = false;
+        if (r) { failUpload(r == 1 ? "size" : r == 2 ? "crc" : "not started"); return; }
+        int32_t cnt = hxm_check_header(clipBuf, up.size);
+        if (cnt < 0) { sendErr("bad clip"); return; }
+        clipCount = cnt; clipIdx = 0; clipLoop = upRamLoop;
+        clipMode = true; live = false; paused = false; holdUntil = 0; nextAt = millis();
+        out->printf("{\"ok\":true,\"clip\":%lu,\"loop\":%s}\n", (unsigned long)clipCount, clipLoop ? "true" : "false");
+        return;
+      }
       upf.close();
       if (r) { failUpload(r == 1 ? "size" : r == 2 ? "crc" : "not started"); return; }
       String path = String(DIR) + "/" + upName;
@@ -320,8 +386,9 @@ static void handleFile() {
       return; }
     case HXM_PLAY:
       if (n != 1) { sendErr("bad play"); return; }
-      if (b[0] == 0xFF) paused = true;
-      else { paused = false; live = false; openProgram(b[0], true); }
+      if (b[0] == 0xFE) { live = false; clipStop(); }       // 一時再生をやめて番組へ
+      else if (b[0] == 0xFF) { clipMode = false; paused = true; }
+      else { paused = false; live = false; clipMode = false; openProgram(b[0], true); }
       sendStatus();
       return;
   }
@@ -358,6 +425,7 @@ static void wifiSetup() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(wName);
   WiFi.setAutoReconnect(true);
+  WiFi.setSleep(false);                  // 省電力を切る (入れたままだと受信が100ms単位で遅れ、まとめて届く)
   WiFi.begin(ssid.c_str(), pass.c_str());
   wifiOn = true;
 }
@@ -409,6 +477,7 @@ static void handlePacket() {
     case HXM_FRAME:
       if (pk->len != 32) { sendErr("frame len"); return; }
       memcpy(frame, pk->buf, 32);
+      clipMode = false;                           // 1コマずつ届いたらそちらを優先
       live = true; lastLiveMs = millis(); needRestore = false; holdUntil = 0;
       setOut(liveBri);
       drawFrame(); frames++;
@@ -429,6 +498,7 @@ static void handlePacket() {
 
 // ---------------------------------------------------------------- ボタン
 static void buttons() {
+  if (clipMode && (M5.BtnA.wasClicked() || M5.BtnB.wasClicked() || M5.BtnC.wasClicked())) { clipStop(); flashText(">", 400); return; }
   if (M5.BtnA.wasClicked()) { paused = false; live = false; openProgram(cur - 1, true); }
   if (M5.BtnC.wasClicked()) { paused = false; live = false; openProgram(cur + 1, true); }
   if (M5.BtnA.wasHold())    { paused = false; live = false; openProgram(cur, true); }
@@ -481,9 +551,9 @@ void loop() {
   if (!usbParser.idle() && now - lastByteMs > 300) usbParser.reset();   // 途切れたパケットは捨てる
   netTick(now);
   if (up.active && now - upLastMs > 5000) failUpload("upload timeout");
-  if (live && now - lastLiveMs > LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る
+  if (live && now - lastLiveMs > LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
     live = false;
-    if (pf) nextAt = now; else openProgram(cur, false);
+    if (clipMode) nextAt = now; else if (pf) nextAt = now; else openProgram(cur, false);
   }
   if (needRestore && (int32_t)(now - holdUntil) >= 0 && (paused || !pf)) {   // 知らせの字を消して元の絵へ
     needRestore = false; drawFrame();
@@ -500,6 +570,6 @@ void loop() {
       openProgram(cur, true);
     }
   }
-  playTick();
+  if (clipMode) clipTick(); else playTick();
   delay(1);
 }
