@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.6.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.7.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -7,12 +7,14 @@
 //                     (切り替えると本体フラッシュに保存した番組は消える。microSD の番組はそのまま)
 //
 //   番組 (.hxm) を microSD の /hexa/ から読んで流す。カードが無ければ本体のフラッシュを使う。
-//   電源を入れると、最後に流していた番組から始める。
+//   電源を入れても番組は流さない (消灯で待つ)。B を押すと、最後に選んでいた番組から流す。
+//   CPZ / STUDIO からコマや一時再生が届いたら、番組は止めてそちらだけを出す (混ざらないように)。
+//   それが終わったら消灯に戻る (番組は自動では再開しない)。
 //
 //   ボタン   押す            長押し
-//     A      前の番組        番組の頭から
-//     B      一時停止/再生   全体の明るさ (4段)
-//     C      次の番組        向きを90°回す
+//     A      前の番組を流す  番組の頭から
+//     B      再生 / 止める   全体の明るさ (4段)
+//     C      次の番組を流す  向きを90°回す
 //
 //   USBシリアル(115200)で hxm_proto.h のパケットを受ける。
 //   コマ(FRAME)が届いている間はそちらを優先し、3秒止まると番組に戻る。
@@ -38,7 +40,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.6.0";
+static const char* FW_VER = "0.7.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -81,7 +83,7 @@ static int      detIn = -1;           // SD が読めた時の検出ピンの値
 static File     pf;
 static int32_t  pfCount = 0, pfIdx = 0;
 static int      cur = 0;
-static bool     paused = false;
+static bool     paused = true;         // true = 番組を流していない (起動時はこちら)
 static uint32_t nextAt = 0, holdUntil = 0;
 static bool     needRestore = false;
 static uint8_t  masterIdx = 3;
@@ -279,10 +281,22 @@ static bool openProgram(int i, bool announce);
 static void failUpload(const char* e) {
   bool ram = upRam;
   abortUpload();
-  if (!ram) openProgram(cur, false);     // メモリへの受け取りなら番組はそのまま
+  if (!ram && !paused) openProgram(cur, false);     // メモリへの受け取りなら番組はそのまま
   sendErr(e);
 }
-static void clipStop() { if (clipMode) { clipMode = false; if (pf) nextAt = millis(); else openProgram(cur, false); } }
+/// 何も流さない状態 (消灯) にする。番組・ライブ・一時再生をすべて止める
+static void goIdle() {
+  paused = true; live = false; clipMode = false;
+  if (pf) pf.close();
+  pfCount = pfIdx = 0;
+  memset(frame, 0, sizeof frame);
+  if ((int32_t)(millis() - holdUntil) >= 0) drawFrame(); else needRestore = true;   // 知らせの字が出ていれば消えてから
+}
+/// 外から絵が来た: 番組は止める (戻ったときに勝手に再開しない)
+static void stopProgramForExternal() {
+  if (!paused || pf) { paused = true; if (pf) pf.close(); pfCount = pfIdx = 0; }
+}
+static void clipStop() { if (clipMode) goIdle(); }
 static void clipTick() {
   if (!clipMode || live) return;
   uint32_t now = millis();
@@ -353,7 +367,8 @@ static void handleFile() {
         int32_t cnt = hxm_check_header(clipBuf, up.size);
         if (cnt < 0) { sendErr("bad clip"); return; }
         clipCount = cnt; clipIdx = 0; clipLoop = upRamLoop;
-        clipMode = true; live = false; paused = false; holdUntil = 0; nextAt = millis();
+        stopProgramForExternal();
+        clipMode = true; live = false; holdUntil = 0; needRestore = false; nextAt = millis();
         out->printf("{\"ok\":true,\"clip\":%lu,\"loop\":%s}\n", (unsigned long)clipCount, clipLoop ? "true" : "false");
         return;
       }
@@ -364,12 +379,12 @@ static void handleFile() {
       if (!FSYS->rename(TMP, path)) { failUpload("rename failed"); return; }
       scanFiles();
       int idx = 0; for (int i = 0; i < nfiles; i++) if (names[i] == upName) idx = i;
-      paused = false; live = false;
+      paused = false; live = false; clipMode = false;   // 保存した番組をそのまま流す (自分で保存した時だけ)
       openProgram(idx, true);
       out->printf("{\"ok\":true,\"saved\":\"%s\",\"idx\":%d}\n", upName, idx);
       return; }
     case HXM_LIST:
-      if (readCardDet() != cardDet || !FSYS) { bool w = (FSYS == &SD); cardDet = readCardDet(); mountStorage(w); openProgram(cur, false); }
+      if (readCardDet() != cardDet || !FSYS) { bool w = (FSYS == &SD); cardDet = readCardDet(); mountStorage(w); if (!paused) openProgram(cur, false); }
       sendList();
       return;
     case HXM_DELETE: {
@@ -380,14 +395,14 @@ static void handleFile() {
       bool ok = FSYS->exists(path) && FSYS->remove(path);
       scanFiles();
       if (cur >= nfiles) cur = nfiles ? nfiles - 1 : 0;
-      openProgram(cur, false);
+      if (!paused) openProgram(cur, false);
       if (!ok) { sendErr("not found"); return; }
       sendList();
       return; }
     case HXM_PLAY:
       if (n != 1) { sendErr("bad play"); return; }
-      if (b[0] == 0xFE) { live = false; clipStop(); }       // 一時再生をやめて番組へ
-      else if (b[0] == 0xFF) { clipMode = false; paused = true; }
+      if (b[0] == 0xFE) { if (clipMode || live) goIdle(); }  // 一時再生をやめて消灯へ
+      else if (b[0] == 0xFF) goIdle();                      // 止める (消灯)
       else { paused = false; live = false; clipMode = false; openProgram(b[0], true); }
       sendStatus();
       return;
@@ -478,6 +493,7 @@ static void handlePacket() {
       if (pk->len != 32) { sendErr("frame len"); return; }
       memcpy(frame, pk->buf, 32);
       clipMode = false;                           // 1コマずつ届いたらそちらを優先
+      stopProgramForExternal();
       live = true; lastLiveMs = millis(); needRestore = false; holdUntil = 0;
       setOut(liveBri);
       drawFrame(); frames++;
@@ -498,13 +514,12 @@ static void handlePacket() {
 
 // ---------------------------------------------------------------- ボタン
 static void buttons() {
-  if (clipMode && (M5.BtnA.wasClicked() || M5.BtnB.wasClicked() || M5.BtnC.wasClicked())) { clipStop(); flashText(">", 400); return; }
-  if (M5.BtnA.wasClicked()) { paused = false; live = false; openProgram(cur - 1, true); }
-  if (M5.BtnC.wasClicked()) { paused = false; live = false; openProgram(cur + 1, true); }
-  if (M5.BtnA.wasHold())    { paused = false; live = false; openProgram(cur, true); }
+  if (M5.BtnA.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur - 1, true); }
+  if (M5.BtnC.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur + 1, true); }
+  if (M5.BtnA.wasHold())    { live = false; clipMode = false; paused = false; openProgram(cur, true); }
   if (M5.BtnB.wasClicked()) {
-    if (live) { live = false; openProgram(cur, true); paused = false; }
-    else { paused = !paused; flashText(paused ? "II" : ">", 400); if (!paused) nextAt = holdUntil; }
+    if (live || clipMode || !paused) { goIdle(); flashText("II", 400); }   // 何か出ていれば止めて消灯
+    else { paused = false; openProgram(cur, true); }                    // 止まっていれば番組を流す
   }
   if (M5.BtnB.wasHold()) {
     masterIdx = (masterIdx + 1) & 3; prefs.putUChar("mst", masterIdx);
@@ -535,7 +550,7 @@ void setup() {
   mountStorage();
   if (sdBad) { flashText("SD", 1500); delay(1500); }   // カードが読めない (FAT32 にしてください)
   wifiSetup();
-  openProgram(cur, true);
+  goIdle();                              // 起動時は流さない (B で再生)
   sendStatus();
 }
 
@@ -553,7 +568,7 @@ void loop() {
   if (up.active && now - upLastMs > 5000) failUpload("upload timeout");
   if (live && now - lastLiveMs > LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
     live = false;
-    if (clipMode) nextAt = now; else if (pf) nextAt = now; else openProgram(cur, false);
+    if (clipMode) nextAt = now; else goIdle();                     // 番組は自動で再開しない
   }
   if (needRestore && (int32_t)(now - holdUntil) >= 0 && (paused || !pf)) {   // 知らせの字を消して元の絵へ
     needRestore = false; drawFrame();
@@ -567,7 +582,7 @@ void loop() {
       bool wasSd = (FSYS == &SD);
       cardDet = d; mountStorage(wasSd);
       if (sdBad) { flashText("SD", 1500); delay(1500); }
-      openProgram(cur, true);
+      if (!paused) openProgram(cur, true);
     }
   }
   if (clipMode) clipTick(); else playTick();

@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -526,10 +526,21 @@ class Hub:
         name, data = self.lib_read(name)
         return self.play_data(name, data, loop, dur)
 
+    def _takeover(self):
+        """CPZ から流し始めたことをブラウザ (STUDIO) へ知らせる。STUDIO はプレビューの送信を止める
+        (止めないと、ブラウザのプレビューと CPZ の絵が交互に出る)"""
+        msg = json.dumps({"ok": True, "hub": "cpz", "takeover": True})
+        for fn in list(self.link.listeners):
+            try:
+                fn(msg)
+            except Exception:
+                pass
+
     def play_data(self, name, data, loop=True, dur=None):
         """CPZ から流す。ファーム v0.6 以上ならコマ列をまとめて本体のメモリへ送り、本体の時計で流してもらう
         (1コマずつ送ると、特に Wi-Fi では届き方がばらついてカクつく / 本体の番組と混ざる)"""
         fr = H.parse_hxm(data)
+        self._takeover()
         if self.link.connected and self.link.fw_at_least(0, 6, 0) and len(data) <= 4 * 1024 * 1024:
             if not self.xfer_lock.acquire(timeout=10):
                 raise RuntimeError("いま別の番組を送っています")

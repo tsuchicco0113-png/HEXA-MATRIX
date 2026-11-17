@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -236,7 +236,9 @@ class App:
             return "ブラウザから送信中", OKC
         dv = st.get("dev") or {}
         if dv:
-            return ("本体: 一時停止" if dv.get("paused") else f"本体の番組 {dv.get('cur', 0) + 1}/{dv.get('n', 0)}"), SUB
+            if dv.get("clip"):
+                return "本体: CPZの絵を流しています", SUB
+            return ("本体: 待機中 (Bで番組)" if dv.get("paused") else f"本体の番組 {dv.get('cur', 0) + 1}/{dv.get('n', 0)}"), SUB
         return "", SUB
 
     # ---- 画面

@@ -724,6 +724,13 @@ function onLine(ln){
   if(typeof deliverReply==="function") deliverReply(j);
   if(j.hub){                                                       // CPZ (hmatrixd) からの知らせ
     if(j.ok===false){ if(!waiters.length) log("CPZ: "+j.err,"err"); return; }
+    if(j.takeover){                                                // CPZ 側で流し始めた → こちらからは送らない
+      const was=$("live").checked||$("pLive").checked;
+      $("live").checked=false; $("pLive").checked=false;
+      if(typeof animStop==="function") animStop(true);
+      if(was){ log("CPZ側で流し始めたので、実機への送信を止めました (チェックを入れ直すとこちらが優先)","ok"); status("CPZ側で流し始めたので、実機への送信を止めました","ok"); }
+      return;
+    }
     if(j.connected===false) log("CPZ: CoreMatrix がつながっていません (USB なら USB-SW を Host 側にして USB-A/C1 へ。Wi-Fi なら SD の hexa/wifi.txt)","err");
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
@@ -760,7 +767,7 @@ function connectHub(){
     writer={write:async b=>{ if(s.readyState!==1) throw new Error("CPZとの接続が切れました"); s.send(b); }};
     setConn(true); log("CPZ経由で接続しました","ok");
     tx(packet(HXM.PING));
-    if(curView==="mark") queueFrame(grid);
+    // CPZ 経由では、開いただけで実機の表示を奪わない (送るのはチェックを入れてから)
     setTimeout(()=>{ if(writer) devRefresh(); },400);
   };
   s.onmessage=e=>{ if(typeof e.data==="string") e.data.split("\n").forEach(l=>{ l=l.trim(); if(l) onLine(l); }); };
@@ -779,6 +786,7 @@ async function detectHub(){
     hubMode=true;
     $("conn").disabled=false; $("noSerial").style.display="none"; $("hubNote").style.display="block";
     $("progCpz").style.display="";
+    $("live").checked=false; $("pLive").checked=false;            // CPZ 側の表示を勝手に奪わない
     connectHub();
   }catch(e){}
 }

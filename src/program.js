@@ -347,7 +347,7 @@ function setView(v){
   $("vMark").hidden = v!=="mark"; $("vProg").hidden = v!=="prog";
   document.querySelectorAll(".markOnly").forEach(e=>e.style.display = v==="mark"?"":"none");
   if(v==="prog"){ libOptions(); formFill(); previewSelected(); }
-  else{ stopPlay(); if(writer) queueFrame(grid); }
+  else{ stopPlay(); if(writer && $("live").checked) queueFrame(grid); }
   try{ history.replaceState(null,"","#"+v); }catch(e){}
 }
 document.querySelectorAll(".vtabs button").forEach(b=>b.onclick=()=>setView(b.dataset.v));
