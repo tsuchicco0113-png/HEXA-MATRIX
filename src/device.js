@@ -54,6 +54,7 @@ function devRender(){
   if(!devList){ $("devStore").textContent="-"; return; }
   const st={sd:"microSD",flash:"本体メモリ (カードなし)",none:"保存先なし"}[devList.store]||devList.store;
   $("devStore").textContent=st+(devList.store!=="none"?" ・ 空き "+(devList.free>=1024?(devList.free/1024).toFixed(1)+"MB":devList.free+"KB"):"");
+  if(devList.sd==="unreadable"){ $("devStore").textContent+=" ※ microSDが読めません。FAT32 でフォーマットし直してください"; $("devStore").style.color="var(--warn)"; }
   if(!devList.files.length){ const d=document.createElement("div"); d.className="empty"; d.textContent="まだ番組がありません。下の「本体に保存」で送ってください。"; el.appendChild(d); }
   devList.files.forEach((f,i)=>{
     const r=document.createElement("div"); r.className="dev"+(i===devList.cur?" sel":"");

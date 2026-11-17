@@ -159,7 +159,8 @@
           <button id="rotDev" disabled title="本体の表示の向きを90°回します">本体の向き ⟳</button>
         </div>
         <div id="log"></div>
-        <div class="hint" id="noSerial" style="display:none;color:var(--warn)">このブラウザはUSB送信(WebSerial)に対応していません。パソコンのChromeかEdgeで開いてください。</div>
+        <div class="hint" id="noSerial" style="display:none;color:var(--warn)">このブラウザはUSB送信(WebSerial)に対応していません。パソコンのChromeかEdgeで開くか、CardputerZero から開いてください (http://CPZのIP:8090/)。</div>
+        <div class="hint" id="hubNote" style="display:none">CardputerZero 経由で送ります (USBケーブルはCPZとCoreMatrixの間)。スマホからも使えます。</div>
       </div>
 
   <section id="vMark">
@@ -309,6 +310,7 @@
           <input type="file" id="progFile" accept=".json" hidden>
           <button id="progBin" title="本体で単体再生するためのコマ列 (.hxm)">コマ列を書き出す</button>
           <button id="progNew" class="warn">見本に戻す</button>
+          <button id="progCpz" class="primary" style="display:none" title="CardputerZero の中に置きます。CPZ本体のアプリから流したり本体へ送ったりできます">CPZに置く</button>
         </div>
         <div class="hint">番組はこのブラウザに自動で保存されます。コマ列 (.hxm) は本体だけで流すためのファイルで、microSD の hexa フォルダに入れても使えます。</div>
       </div>
@@ -595,6 +597,8 @@ function packet(type,payload){
   return o;
 }
 let port=null, writer=null, reader=null, devRot=1, pendFrame=null, txBusy=false;
+// CardputerZero (hmatrixd) から配信されている時は WebSocket で CPZ に送り、CPZ が USB へ中継する
+let hubMode=false, ws=null, hubWanted=false, hubRetry=0;
 function log(msg,cls){
   const el=$("log"), d=document.createElement("div"); if(cls) d.className=cls; d.textContent=msg;
   el.appendChild(d); while(el.children.length>60) el.firstChild.remove(); el.scrollTop=el.scrollHeight;
@@ -630,6 +634,12 @@ function onLine(ln){
   let j=null; try{ j=JSON.parse(ln); }catch(e){}
   if(!j){ log("本体: "+ln); return; }
   if(typeof deliverReply==="function") deliverReply(j);
+  if(j.hub){                                                       // CPZ (hmatrixd) からの知らせ
+    if(j.ok===false){ if(!waiters.length) log("CPZ: "+j.err,"err"); return; }
+    if(j.connected===false) log("CPZ: CoreMatrix がつながっていません (USB-SW を Host 側にして USB-A/C1 へ)","err");
+    else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
+    return;
+  }
   if(j.ack!==undefined || j.saved!==undefined) return;            // 送信中の返事はログに出さない
   if(j.list){ devList=j; devRender(); return; }
   if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
@@ -646,13 +656,46 @@ function onLine(ln){
   log("本体: "+ln);
 }
 async function disconnect(){
+  if(port&&port.hub){ hubWanted=false; const w=ws; port=writer=null; ws=null; pendFrame=null; try{ w&&w.close(); }catch(e){} setConn(false); log("切断しました"); return; }
   const r=reader, w=writer, p=port; reader=writer=port=null; pendFrame=null;
   try{ r&&await r.cancel(); }catch(e){} try{ r&&r.releaseLock(); }catch(e){}
   try{ w&&w.releaseLock(); }catch(e){} try{ p&&await p.close(); }catch(e){}
   setConn(false); log("切断しました");
 }
+function connectHub(){
+  hubWanted=true;
+  const s=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws");
+  s.binaryType="arraybuffer"; ws=s;
+  s.onopen=()=>{
+    hubRetry=0; port={hub:true};
+    writer={write:async b=>{ if(s.readyState!==1) throw new Error("CPZとの接続が切れました"); s.send(b); }};
+    setConn(true); log("CPZ経由で接続しました","ok");
+    tx(packet(HXM.PING));
+    if(curView==="mark") queueFrame(grid);
+    setTimeout(()=>{ if(writer) devRefresh(); },400);
+  };
+  s.onmessage=e=>{ if(typeof e.data==="string") e.data.split("\n").forEach(l=>{ l=l.trim(); if(l) onLine(l); }); };
+  s.onclose=()=>{
+    if(ws!==s) return;
+    ws=null;
+    if(port&&port.hub){ port=writer=null; pendFrame=null; setConn(false); log("CPZとの接続が切れました","err"); }
+    if(hubWanted && hubRetry<20){ hubRetry++; setTimeout(()=>{ if(hubWanted&&!ws) connectHub(); },1500); }
+  };
+}
+async function detectHub(){
+  if(!/^https?:$/.test(location.protocol)) return;
+  try{
+    const j=await (await fetch("/api/status",{cache:"no-store"})).json();
+    if(j.hub!=="cpz") return;
+    hubMode=true;
+    $("conn").disabled=false; $("noSerial").style.display="none"; $("hubNote").style.display="block";
+    $("progCpz").style.display="";
+    connectHub();
+  }catch(e){}
+}
 $("conn").onclick=async()=>{
   if(port){ await disconnect(); return; }
+  if(hubMode){ connectHub(); return; }
   try{
     const p=await navigator.serial.requestPort();
     await p.open({baudRate:115200});
@@ -668,6 +711,7 @@ $("send").onclick=()=>{ queueFrame(grid); log("送りました (32バイト)","o
 $("bri").oninput=e=>{ const lv=+e.target.value; $("briV").textContent=lv+"/16"; tx(packet(HXM.BRIGHT,[lv*16-1])); };
 $("rotDev").onclick=()=>{ devRot=(devRot+1)&3; tx(packet(HXM.ROTATE,[devRot])); };
 if(!("serial" in navigator)){ $("conn").disabled=true; $("noSerial").style.display="block"; }
+detectHub();
 if(navigator.serial&&navigator.serial.addEventListener)
   navigator.serial.addEventListener("disconnect",e=>{ if(port&&e.target===port){ disconnect(); log("ケーブルが抜けました","err"); } });
 

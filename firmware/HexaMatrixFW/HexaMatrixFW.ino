@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.3.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.4.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -14,6 +14,9 @@
 //
 //   USBシリアル(115200)で hxm_proto.h のパケットを受ける。
 //   コマ(FRAME)が届いている間はそちらを優先し、3秒止まると番組に戻る。
+//
+//   起動時やカードを入れた時に「SD」と出たら、カードが読めていない (exFAT など)。
+//   FAT32 でフォーマットし直すと使える (一度読めたカードで「入っている」状態を覚える)。
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -22,7 +25,7 @@
 #include "hxm_proto.h"
 #include "hxm_xfer.h"
 
-static const char* FW_VER = "0.3.0";
+static const char* FW_VER = "0.4.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -48,6 +51,8 @@ static String   names[MAXF];
 static uint32_t sizes[MAXF];
 static int      nfiles = 0;
 static int      cardDet = -1;
+static bool     sdBad = false;        // カードは入っているのに読めない (exFAT など)
+static int      detIn = -1;           // SD が読めた時の検出ピンの値 (覚えておいて「入っている」の判定に使う)
 
 // 再生
 static File     pf;
@@ -113,13 +118,14 @@ static void flashText(const char* s, uint32_t ms) {
 static uint8_t playBri(uint8_t b) { return (uint8_t)((uint16_t)b * MASTER_LV[masterIdx] / 255); }
 
 // ---------------------------------------------------------------- 返事
+static const char* sdState() { return FSYS == &SD ? "ok" : sdBad ? "unreadable" : "none"; }
 static void sendStatus() {
   Serial.printf("{\"ok\":true,\"dev\":\"corematrix\",\"fw\":\"%s\",\"bri\":%u,\"rot\":%u,"
                 "\"frames\":%lu,\"rx_ok\":%lu,\"rx_bad\":%lu,\"draw_us\":%lu,"
-                "\"store\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u}\n",
+                "\"store\":\"%s\",\"sd\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u}\n",
                 FW_VER, liveBri, rot, (unsigned long)frames,
                 (unsigned long)parser.ok, (unsigned long)parser.bad, (unsigned long)lastDrawUs,
-                store, nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1);
+                store, sdState(), nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1);
 }
 static void sendErr(const char* e) { Serial.printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -129,7 +135,7 @@ static uint64_t freeBytes() {
 }
 static void sendList() {
   String s = "{\"ok\":true,\"list\":true,\"store\":\"";
-  s += store; s += "\",\"free\":"; s += String((unsigned long)(freeBytes() / 1024));
+  s += store; s += "\",\"sd\":\""; s += sdState(); s += "\",\"free\":"; s += String((unsigned long)(freeBytes() / 1024));
   s += ",\"cur\":"; s += cur; s += ",\"paused\":"; s += paused ? "true" : "false";
   s += ",\"files\":[";
   for (int i = 0; i < nfiles; i++) {
@@ -172,17 +178,24 @@ static void scanFiles() {
       uint32_t z = sizes[j]; sizes[j] = sizes[j - 1]; sizes[j - 1] = z;
     }
 }
-static void mountStorage() {
+/// wasSd: 直前まで SD を使っていたか (抜いた時に「読めない」と言わないため)
+static void mountStorage(bool wasSd = false) {
   if (pf) pf.close();
-  FSYS = nullptr; store = "none";
+  FSYS = nullptr; store = "none"; sdBad = false;
   if (M5.getBoard() == m5::board_t::board_M5CoreMatrix) {
     ioe1Out(IOE_TF_EN, true);          // PYB_TF_EN: カードの電源
     delay(30);
   }
   SD.end();
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-  if (SD.begin(SD_CS, SPI, 20000000)) { FSYS = &SD; store = "sd"; }
-  else if (LittleFS.begin(true))       { FSYS = &LittleFS; store = "flash"; }
+  if (SD.begin(SD_CS, SPI, 20000000)) {
+    FSYS = &SD; store = "sd";
+    if (cardDet >= 0 && cardDet != detIn) { detIn = cardDet; prefs.putChar("detIn", (int8_t)detIn); }
+  } else {
+    // 検出ピンが「入っている」側なのに読めない → FAT32 ではないカードの可能性
+    sdBad = !wasSd && detIn >= 0 && cardDet == detIn;
+    if (LittleFS.begin(true)) { FSYS = &LittleFS; store = "flash"; }
+  }
   if (FSYS && !FSYS->exists(DIR)) FSYS->mkdir(DIR);
   scanFiles();
 }
@@ -268,7 +281,7 @@ static void handleFile() {
       Serial.printf("{\"ok\":true,\"saved\":\"%s\",\"idx\":%d}\n", upName, idx);
       return; }
     case HXM_LIST:
-      if (readCardDet() != cardDet || !FSYS) { cardDet = readCardDet(); mountStorage(); openProgram(cur, false); }
+      if (readCardDet() != cardDet || !FSYS) { bool w = (FSYS == &SD); cardDet = readCardDet(); mountStorage(w); openProgram(cur, false); }
       sendList();
       return;
     case HXM_DELETE: {
@@ -361,8 +374,10 @@ void setup() {
   M5.Display.setColorDepth(8);
   M5.Display.setRotation(rot);
   setOut(MASTER_LV[masterIdx]);
+  detIn     = prefs.getChar("detIn", -1);
   cardDet = readCardDet();
   mountStorage();
+  if (sdBad) { flashText("SD", 1500); delay(1500); }   // カードが読めない (FAT32 にしてください)
   openProgram(cur, true);
   sendStatus();
 }
@@ -392,7 +407,12 @@ void loop() {
   if (!up.active && now - lastDet > 1000) {
     lastDet = now;
     int d = readCardDet();
-    if (d >= 0 && d != cardDet) { cardDet = d; mountStorage(); openProgram(cur, true); }
+    if (d >= 0 && d != cardDet) {
+      bool wasSd = (FSYS == &SD);
+      cardDet = d; mountStorage(wasSd);
+      if (sdBad) { flashText("SD", 1500); delay(1500); }
+      openProgram(cur, true);
+    }
   }
   playTick();
   delay(1);

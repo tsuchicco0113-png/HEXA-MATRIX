@@ -310,6 +310,19 @@ $("progBin").onclick=()=>{
   download((prog.name||"program").replace(/[\\/:*?"<>|]/g,"_")+".hxm",new Blob([b],{type:"application/octet-stream"}));
   status("コマ列を書き出しました ("+f.length+"コマ / "+(b.length/1024).toFixed(1)+"KB)","ok");
 };
+/// CardputerZero のライブラリに置く (CPZ が同じエンジンでコマ列を作る)
+$("progCpz").onclick=async()=>{
+  const name=(prog.name||"番組").trim();
+  const body={name:name,program:{format:"hexa-matrix-program",version:1,name:prog.name,scenes:prog.scenes,header:prog.header,footer:prog.footer}};
+  $("progCpz").disabled=true;
+  try{
+    const j=await (await fetch("/api/library",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
+    if(!j.ok) throw new Error(j.err||"失敗しました");
+    status("CPZに置きました: "+j.name+" ("+j.frames+"コマ / "+(j.size/1024).toFixed(1)+"KB)","ok");
+    log("CPZのライブラリに置きました: "+j.name+(j.cycles>1?" ("+j.cycles+"周ぶん)":""),"ok");
+  }catch(e){ status("CPZに置けません: "+e.message,"err"); }
+  $("progCpz").disabled=false;
+};
 $("progNew").onclick=()=>{
   if(!confirm("番組を最初の見本に戻します。いまの番組は消えます。よろしいですか？")) return;
   stopPlay(); prog=demoProgram(); prog.header=defaultHF("H"); prog.footer=defaultHF("F"); sel=0; changed(true);

@@ -1,11 +1,12 @@
-# HEXA MATRIX (v0.3)
+# HEXA MATRIX (v0.4)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
 | ファイル | 役割 |
 |---|---|
 | `hexa-matrix-studio.html` | STUDIO。「マークを作る」と「番組を作る」の2画面。USBで実機に映す |
-| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.3。microSD の番組を自分で流す。USBで届いたコマも表示する |
+| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.4。microSD の番組を自分で流す。USBで届いたコマも表示する |
+| `cpz/` | CardputerZero 用。常駐ハブ (`hmatrixd.py`)、本体アプリ (`hmatrix_app.py`)、描画エンジンの Python 版 (`hxengine.py`) |
 | `src/` `build.py` | STUDIO の元ファイル。`python3 build.py` で1枚のHTMLに組み立てる |
 | `tools/mkfont.py` | ドットフォント (BDF) をSTUDIO用の表に変換する |
 
@@ -35,7 +36,57 @@ CoreMatrix (16×16 白色LED) に絵を出すための一式です。
   2. 「コマ列を書き出す」で作った .hxm を、PCで microSD の `hexa` フォルダへコピー
 - 番組は名前の順に並びます。`01_`、`02_` のように番号を付けると順番を決められます。名前は英数字と `_` `-` だけにしてください
 - USBでコマが届いている間 (STUDIO のプレビュー) はそちらを優先し、届かなくなって3秒で番組に戻ります
-- microSD は FAT32 でフォーマットしたものを使ってください
+- microSD は FAT32 でフォーマットしたものを使ってください。64GB 以上のカードは出荷時 exFAT なので、そのままでは読めません
+  (Mac: ディスクユーティリティで「MS-DOS (FAT)」+「マスター・ブート・レコード」、Windows: guiformat や Rufus で FAT32)
+- v0.4 から、カードが読めないときは起動時やカードを入れた時に「SD」と出ます。STUDIO の「本体の番組」にも案内が出ます
+  (一度 FAT32 のカードが読めると「カードが入っている」状態を覚えるので、それ以降に読めないカードを入れると知らせます)
+
+## CardputerZero で使う (v0.4)
+
+CPZ に CoreMatrix をUSBでつなぐと、CPZ が「頭脳」になります。
+
+```
+CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブラウザ (STUDIO)
+                    └ 本体アプリ「HEXA MATRIX」(キーボードで操作)
+```
+
+1. CPZ で `git clone https://github.com/tsuchicco0113-png/HEXA-MATRIX ~/hexa-matrix && cd ~/hexa-matrix && sh cpz/install.sh`
+2. 案内どおり `sudo reboot`
+3. CPZ 左の USB-SW を **Host 側 (右/下)** にして、CoreMatrix を USB-A か USB-C1 につなぐ
+4. スマホ/PCのブラウザで `http://<CPZのIP>:8090/` を開く → STUDIO が開き、自動で CPZ 経由に接続します
+   (WebSerial が要らないので、スマホや Safari でも送れます)
+
+- 常駐ハブ `hexa-matrix.service` (ポート 8090) が USB を一手に持ちます。STUDIO も本体アプリもここを通ります
+- STUDIO の「保存と書き出し」に **CPZに置く** が出ます。番組を CPZ のライブラリ (`~/.local/share/hexa-matrix/library/`) に置き、
+  CPZ が同じエンジン (Python版) でコマ列を作ります (STUDIO と1バイト違わないことを確認済み)
+- ホーム画面の「HEXA MATRIX」アプリ (方向は F/X/Z/C、ことば画面では fn+F/X/Z/C)
+
+| 画面 | できること |
+|---|---|
+| 1 ことば | 打った文字をその場で流す。動き・入り方・はやさ・明るさ・字の大きさを選べる (英数字と記号) |
+| 2 ライブラリ | CPZに置いた番組を CPZ から流す (くりかえし / 1回)、本体(SD)へ送る、消す |
+| 3 本体 | CoreMatrix の中の番組を選んで流す、止める、消す |
+| 4 設定 | CoreMatrix の明るさ、向き、スマホから開くQR |
+
+- ブラウザから送り始めると、CPZ からの再生は止まります (後から操作した方が優先)
+- 困ったとき: `journalctl -u hexa-matrix -n 30` / アプリのログ `~/.local/share/hexa-matrix/app.log`
+
+### ハブの API (localhost からも LAN からも)
+
+| | |
+|---|---|
+| `GET /` | STUDIO |
+| `GET /ws` | WebSocket。バイナリで送ったパケットをそのまま USB へ、本体の返事 (1行JSON) をテキストで返す |
+| `GET /api/status` | つながり、本体の状態、CPZの再生、いま出している絵 |
+| `GET/POST /api/library` | 一覧 / 置く (`{"name","program"}` か `?name=` + .hxm の中身) |
+| `GET/DELETE /api/library/<名前>` | .hxm を取り出す / 消す |
+| `POST /api/play` `{"name","loop"}` ・ `POST /api/stop` | CPZ から流す / 止める |
+| `POST /api/say` `{"text","show","eff","speed","bri","size"}` | ことばを流す |
+| `POST /api/push` `{"name","as"}` | ライブラリの番組を本体へ保存 |
+| `GET /api/device/list` ・ `POST /api/device/play` `{"idx"}`/`{"pause":true}` ・ `POST /api/device/delete` `{"name"}` | 本体の番組 |
+| `POST /api/device/bright` `{"value"}` ・ `POST /api/device/rotate` | 明るさ (ライブ) / 向き |
+
+認証はありません。家のLANの中で使ってください。
 
 ## 通信の形
 
@@ -51,11 +102,11 @@ CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 | 0x10 FILE_BEGIN | 4+n | u32 大きさ + ファイル名 |
 | 0x11 FILE_DATA | 2+n | u16 通し番号 + 中身 (200バイトまで)。1つごとに `{"ok":true,"ack":番号}` |
 | 0x12 FILE_END | 4 | u32 CRC-32。合えば `{"ok":true,"saved":名前,"idx":番号}` |
-| 0x13 LIST | 0 | 番組一覧 `{"ok":true,"list":true,"store","free"(KB),"cur","paused","files":[{"n","s"}]}` |
+| 0x13 LIST | 0 | 番組一覧 `{"ok":true,"list":true,"store","sd","free"(KB),"cur","paused","files":[{"n","s"}]}` |
 | 0x14 DELETE | n | ファイル名 |
 | 0x15 PLAY | 1 | 番組の番号 (0から)。0xFF で一時停止 |
 
-本体からの返事は1行ずつのJSONです。
+本体からの返事は1行ずつのJSONです。v0.4 から PING と LIST の返事に `"sd"` (`ok` / `unreadable` = カードが読めない / `none`) が入ります。
 
 ## 番組を作る
 
