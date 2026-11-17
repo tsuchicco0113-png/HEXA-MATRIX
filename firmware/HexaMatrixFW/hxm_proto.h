@@ -1,0 +1,60 @@
+// HEXA MATRIX 受信プロトコル (Arduino に依存しない。PC でもそのままテストできる)
+//
+//   A5 5A <type> <len> <payload ...> <crc8>
+//   crc8 は type, len, payload を通した CRC-8 (多項式 0x07, 初期値 0)
+//
+//   type 0x01 FRAME   len=32  1コマ。上の行から、各行は左8点→右8点、MSBが左、1=点灯
+//        0x02 BRIGHT  len=1   USBで流すときの明るさ 0〜255 (16段階に丸まる。0 は消灯。保存しない)
+//        0x03 PING    len=0   状態を1行のJSONで返す
+//        0x04 ROTATE  len=1   向き 0〜3
+//        0x05 BENCH   len=0   描画速度を測って返す
+//   ---- 単体再生 (v0.3) ----
+//        0x10 FILE_BEGIN len=4+n  u32 全体の大きさ + ファイル名 (英数字 _ - . のみ)
+//        0x11 FILE_DATA  len=2+n  u16 通し番号 + 中身 (n は 200 まで)
+//        0x12 FILE_END   len=4    u32 CRC-32 (zlib と同じ)
+//        0x13 LIST       len=0    本体の番組一覧を返す
+//        0x14 DELETE     len=n    ファイル名
+//        0x15 PLAY       len=1    番組の番号 (0から)。0xFF は一時停止
+#pragma once
+#include <stdint.h>
+
+enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05,
+                 HXM_FILE_BEGIN = 0x10, HXM_FILE_DATA = 0x11, HXM_FILE_END = 0x12,
+                 HXM_LIST = 0x13, HXM_DELETE = 0x14, HXM_PLAY = 0x15 };
+static const uint8_t HXM_MAX_PAYLOAD = 240;
+
+static inline uint8_t hxm_crc8(uint8_t crc, uint8_t b) {
+  crc ^= b;
+  for (uint8_t i = 0; i < 8; i++) crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+  return crc;
+}
+
+struct HxmParser {
+  enum : uint8_t { M0, M1, TYPE, LEN, PAY, CRC };
+  uint8_t st = M0, type = 0, len = 0, pos = 0, crc = 0;
+  uint8_t buf[HXM_MAX_PAYLOAD];
+  uint32_t ok = 0, bad = 0;
+
+  void reset() { st = M0; }
+  bool idle() const { return st == M0; }
+
+  // 1バイト入れる。戻り値: 1=1パケットそろった (type/len/buf を読む) / -1=壊れていた / 0=途中
+  int feed(uint8_t b) {
+    switch (st) {
+      case M0: if (b == 0xA5) st = M1; return 0;
+      case M1: st = (b == 0x5A) ? TYPE : (b == 0xA5 ? M1 : M0); return 0;
+      case TYPE: type = b; crc = hxm_crc8(0, b); st = LEN; return 0;
+      case LEN:
+        if (b > HXM_MAX_PAYLOAD) { st = M0; bad++; return -1; }
+        len = b; pos = 0; crc = hxm_crc8(crc, b); st = len ? PAY : CRC; return 0;
+      case PAY:
+        buf[pos++] = b; crc = hxm_crc8(crc, b);
+        if (pos >= len) st = CRC;
+        return 0;
+      default:
+        st = M0;
+        if (b == crc) { ok++; return 1; }
+        bad++; return -1;
+    }
+  }
+};

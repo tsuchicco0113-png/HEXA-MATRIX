@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>HEXA MATRIX STUDIO — CoreMatrix 16×16</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --text:#e6edf3; --dim:#8b949e;
+    --acc:#2fd67b; --warn:#f85149; --off:#1b1f26; --on:#ffffff;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{margin:0; background:var(--bg); color:var(--text);
+    font-family:ui-monospace,"SFMono-Regular",Menlo,Consolas,"Hiragino Sans","Noto Sans JP",monospace;
+    font-size:13px}
+  .wrap{max-width:980px; margin:0 auto; padding:20px 14px 60px}
+  header{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:14px}
+  h1{font-size:18px; margin:0; letter-spacing:.12em}
+  .tag{color:var(--acc); font-size:11px; border:1px solid var(--border); border-radius:5px; padding:2px 8px}
+  .cols{display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:start}
+  @media(max-width:760px){.cols{grid-template-columns:1fr}}
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px; margin-bottom:14px}
+  .panel h2{font-size:11px; color:var(--dim); margin:0 0 10px; letter-spacing:.1em; font-weight:600}
+  .stage{position:sticky; top:12px}
+  @media(max-width:760px){.stage{position:static}}
+
+  /* 編集グリッド: LEDらしく丸いドット */
+  #grid{display:grid; grid-template-columns:repeat(16,1fr); gap:3px; padding:10px;
+    width:min(400px,calc(100vw - 58px)); aspect-ratio:1; background:#000;
+    border:1px solid var(--border); border-radius:12px; touch-action:none; user-select:none}
+  .c{border-radius:50%; background:var(--off); cursor:crosshair}
+  .c.on{background:var(--on); box-shadow:0 0 5px rgba(255,255,255,.75)}
+  .pvrow{display:flex; align-items:center; gap:12px; margin-top:12px; flex-wrap:wrap}
+  #pv{background:#000; border:1px solid var(--border); border-radius:8px}
+  .lbl{color:var(--dim); font-size:11px; line-height:1.6}
+
+  button{font-family:inherit; font-size:12px; background:var(--panel); color:var(--text);
+    border:1px solid var(--border); border-radius:7px; padding:8px 11px; cursor:pointer}
+  button:hover{border-color:var(--acc)}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  button.primary{background:var(--acc); color:#04150a; border-color:var(--acc); font-weight:700}
+  button.warn:hover{border-color:var(--warn)}
+  button.sel{background:var(--acc); color:#04150a; border-color:var(--acc); font-weight:700}
+  .grp{display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:8px}
+  .grp>.g{font-size:10px; color:var(--dim); min-width:40px}
+  input[type=text],select{font-family:inherit; font-size:12px; background:var(--bg); color:var(--text);
+    border:1px solid var(--border); border-radius:6px; padding:7px 8px; min-width:0}
+  input[type=range]{accent-color:var(--acc)}
+  .hint{font-size:11px; color:var(--dim); line-height:1.7; margin-top:6px}
+
+  .dot{width:9px; height:9px; border-radius:50%; background:var(--dim)}
+  .dot.on{background:var(--acc); box-shadow:0 0 8px var(--acc)}
+  #log{background:#010409; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:11px;
+    color:var(--dim); height:70px; overflow-y:auto; white-space:pre-wrap; line-height:1.5}
+  #log .ok{color:var(--acc)} #log .err{color:var(--warn)}
+  .vtabs{display:flex; gap:6px; margin-bottom:14px}
+  .vtabs button{flex:0 0 auto; padding:9px 18px; font-size:13px}
+  .connp{margin-bottom:14px}
+  #ppv{width:min(400px,calc(100vw - 58px)); aspect-ratio:1; background:#000; border:1px solid var(--border); border-radius:12px; display:block}
+  #scenes{display:flex; flex-direction:column; gap:6px}
+  .scene{display:flex; align-items:center; gap:10px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--bg)}
+  .scene:hover{border-color:var(--dim)} .scene.sel{border-color:var(--acc)}
+  .scene canvas{width:40px; height:40px; border-radius:5px; flex:0 0 auto}
+  .stxt{flex:1; min-width:0; display:flex; flex-direction:column; gap:2px}
+  .stxt b{font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600}
+  .stxt span{font-size:11px; color:var(--dim)}
+  .sbtn{display:flex; gap:3px; flex:0 0 auto}
+  #hfHead,#hfFoot{margin:0 0 6px} #hfFoot{margin:6px 0 0}
+  .scene.hf{border-style:dashed}
+  .scene.hf.off canvas,.scene.hf.off .stxt{opacity:.4}
+  .scene.hf select{font-size:11px; padding:4px 6px; flex:0 0 auto}
+  .hfsw{display:flex; align-items:center; padding:0 2px; cursor:pointer}
+  .hfsw input{width:16px; height:16px; accent-color:var(--acc); cursor:pointer}
+  .sbtn button{padding:4px 7px; font-size:11px}
+  textarea{width:100%; font-family:inherit; font-size:14px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px; resize:vertical}
+  #fFrames{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px}
+  .fr{display:flex; flex-direction:column; align-items:center; gap:2px}
+  .fr canvas{width:40px; height:40px; background:#000; border-radius:5px}
+  .fr button{font-size:10px; padding:1px 6px}
+  .dimrow{opacity:.35; pointer-events:none}
+  #fLib{flex:1; min-width:0}
+  #toast{position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:8px 14px; font-size:12px; opacity:0; pointer-events:none; transition:opacity .2s; z-index:60; max-width:90vw}
+  #toast.show{opacity:1} #toast.ok{color:var(--acc)} #toast.err{color:var(--warn)}
+  #devList{display:flex; flex-direction:column; gap:4px}
+  .dev{display:flex; align-items:center; gap:8px; padding:5px 8px; border:1px solid var(--border); border-radius:7px; background:var(--bg)}
+  .dev.sel{border-color:var(--acc)}
+  .dev .dn{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px}
+  .dev button{padding:3px 9px; font-size:11px}
+  #devProg{height:6px; background:var(--bg); border:1px solid var(--border); border-radius:4px; margin-top:8px; overflow:hidden}
+  #devBar{height:100%; width:0; background:var(--acc); transition:width .1s}
+  /* ライブラリ */
+  .lib{display:grid; grid-template-columns:repeat(auto-fill,minmax(76px,1fr)); gap:8px; max-height:260px; overflow-y:auto}
+  .card{background:#000; border:1px solid var(--border); border-radius:8px; padding:6px; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:4px}
+  .card:hover{border-color:var(--acc)}
+  .card canvas{width:100%; aspect-ratio:1}
+  .card .nm{font-size:10px; text-align:center; word-break:break-all; max-height:26px; overflow:hidden}
+  .card button{font-size:10px; padding:2px 8px; width:100%}
+  .empty{color:var(--dim); font-size:12px; padding:16px 4px; text-align:center; border:1px dashed var(--border); border-radius:8px}
+
+  /* 出力 */
+  .tabs{display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:0}
+  .tabs button{background:none; border:none; border-bottom:2px solid transparent; border-radius:0; color:var(--dim); padding:7px 12px}
+  .tabs button.sel{background:none; color:var(--acc); border-bottom-color:var(--acc)}
+  pre{margin:0; padding:12px; background:#010409; border:1px solid var(--border); border-top:none;
+    border-radius:0 0 8px 8px; font-size:11px; line-height:1.55; overflow:auto; max-height:240px; white-space:pre}
+  #status{color:var(--dim); font-size:11px; min-height:16px; margin-top:8px}
+  #status.ok{color:var(--acc)} #status.err{color:var(--warn)}
+
+  /* 画像取込モーダル */
+  #modal{display:none; position:fixed; inset:0; background:rgba(0,0,0,.82); z-index:50;
+    align-items:center; justify-content:center; padding:8px}
+  #modal.show{display:flex}
+  .mbox{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px;
+    width:100%; max-width:760px; max-height:96vh; overflow-y:auto}
+  .mcols{display:grid; grid-template-columns:auto 1fr; gap:14px; align-items:start}
+  @media(max-width:700px){.mcols{grid-template-columns:1fr}}
+  #cropWrap{position:relative; display:inline-block; touch-action:none; overflow:hidden; border-radius:6px;
+    background:repeating-conic-gradient(#20242b 0 25%,#15181d 0 50%) 0 0/16px 16px}
+  #cropCv{display:block}
+  #cropBox{position:absolute; border:2px solid var(--acc); box-shadow:0 0 0 9999px rgba(0,0,0,.55); cursor:move}
+  #impPv{background:#000; border:1px solid var(--border); border-radius:8px; display:block}
+  .row{display:flex; align-items:center; gap:8px; margin:8px 0; flex-wrap:wrap}
+  .row>.g{font-size:11px; color:var(--dim); min-width:58px}
+  .row input[type=range]{flex:1; min-width:90px}
+  .row label{display:flex; align-items:center; gap:4px; font-size:12px}
+  .val{font-size:11px; color:var(--acc); min-width:34px; text-align:right}
+  body.drop::after{content:"ここに画像を落とす"; position:fixed; inset:10px; border:2px dashed var(--acc);
+    border-radius:14px; display:flex; align-items:center; justify-content:center; font-size:18px;
+    background:rgba(13,17,23,.85); z-index:40; pointer-events:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>HEXA MATRIX</h1>
+    <span class="tag">STUDIO 16×16 / 白1色</span>
+    <span class="lbl">CoreMatrix 用。マークを作り、文字と動きを並べて番組にする。</span>
+  </header>
+  <nav class="vtabs">
+    <button data-v="mark" class="sel">マークを作る</button>
+    <button data-v="prog">番組を作る</button>
+  </nav>
+      <div class="panel connp">
+        <h2>CoreMatrix へ送る (USB)</h2>
+        <div class="grp">
+          <span class="dot" id="cdot"></span><span id="cstate" class="lbl">未接続</span>
+          <button id="conn">接続</button>
+          <span class="markOnly" style="display:contents">
+          <button id="send" class="primary" disabled>いまの絵を送る</button>
+          <label class="lbl" style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="live" checked> 描いたらすぐ映す</label></span>
+        </div>
+        <div class="grp"><span class="g">明るさ</span>
+          <input type="range" id="bri" min="1" max="16" value="6" style="flex:1;min-width:120px" disabled>
+          <span class="val" id="briV">6/16</span>
+          <button id="rotDev" disabled title="本体の表示の向きを90°回します">本体の向き ⟳</button>
+        </div>
+        <div id="log"></div>
+        <div class="hint" id="noSerial" style="display:none;color:var(--warn)">このブラウザはUSB送信(WebSerial)に対応していません。パソコンのChromeかEdgeで開いてください。</div>
+      </div>
+
+  <section id="vMark">
+
+  <div class="cols">
+    <div class="panel stage">
+      <div id="grid"></div>
+      <div class="pvrow">
+        <canvas id="pv" width="96" height="96"></canvas>
+        <div class="lbl">
+          小さく見たとき<br>
+          点灯 <b id="litN" style="color:var(--text)">0</b> / 256<br>
+          なぞると描画、点いている所から<br>なぞると消去
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>画像から作る</h2>
+        <div class="grp">
+          <button id="impBtn" class="primary">画像から取込</button>
+          <input type="file" id="impFile" accept="image/*" hidden>
+          <span class="lbl">ファイル選択のほか、貼り付け (Ctrl+V) やドラッグ＆ドロップでも開きます</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>ツール</h2>
+        <div class="grp"><span class="g">履歴</span>
+          <button id="undo">↶ 戻す</button><button id="redo">↷ 進む</button></div>
+        <div class="grp"><span class="g">変形</span>
+          <button id="inv">明暗反転</button><button id="flipH">⇄ 左右</button>
+          <button id="flipV">⇅ 上下</button><button id="rot">⟳ 回転</button></div>
+        <div class="grp"><span class="g">移動</span>
+          <button id="sL">←</button><button id="sR">→</button><button id="sU">↑</button><button id="sD">↓</button>
+          <label class="lbl" style="display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="wrap"> はみ出しを反対側へ回す</label></div>
+        <div class="grp"><span class="g">掃除</span>
+          <button id="speck" title="まわり8マスに仲間がいない点を消します">孤立した点を消す</button>
+          <button id="outline" title="塗りつぶしの中を抜いて外周だけ残します">輪郭だけにする</button>
+          <button id="clear" class="warn">全消去</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>マーク置き場</h2>
+        <div class="grp">
+          <input type="text" id="name" placeholder="マーク名 (例: heart / 営業中)" maxlength="24" style="flex:1 1 140px">
+          <button id="save" class="primary">保存</button>
+        </div>
+        <div class="lib" id="lib"></div>
+        <div class="grp" style="margin-top:10px">
+          <button id="libExp">まとめて書き出す</button>
+          <button id="libImp">読み込む</button>
+          <input type="file" id="libFile" accept=".json" hidden>
+        </div>
+        <div class="hint">保存先はこのブラウザの中です。カードを押すと呼び出します。同じ名前は上書きします。</div>
+      </div>
+
+      <div class="panel">
+        <h2>出力</h2>
+        <div class="tabs">
+          <button data-t="c" class="sel">C配列</button>
+          <button data-t="b">32バイト</button>
+          <button data-t="j">JSON</button>
+        </div>
+        <pre id="out"></pre>
+        <div class="grp" style="margin-top:10px">
+          <button id="copy">コピー</button>
+          <button id="png">PNG保存</button>
+        </div>
+        <div id="status"></div>
+      </div>
+    </div>
+  </div>
+  </section>
+  <section id="vProg" hidden>
+  <div class="cols">
+    <div class="panel stage">
+      <canvas id="ppv" width="400" height="400"></canvas>
+      <div class="grp" style="margin-top:12px">
+        <button id="pPlay" class="primary">▶ 再生</button>
+        <select id="pMode"><option value="scene">このシーンだけ</option><option value="all">番組ぜんぶ</option></select>
+        <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="pLoop" checked> くりかえす</label>
+        <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="pLive" checked> 実機にも流す</label>
+      </div>
+      <div class="lbl" id="pInfo">-</div>
+      <div class="hint" id="fontErr" style="display:none;color:var(--warn)"></div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>番組</h2>
+        <div class="grp">
+          <input type="text" id="progName" maxlength="40" style="flex:1 1 140px" aria-label="番組名">
+        </div>
+        <div id="hfHead"></div>
+        <div id="scenes"></div>
+        <div id="hfFoot"></div>
+        <div class="hint" id="cycleNote"></div>
+        <div class="grp" style="margin-top:10px">
+          <button id="addText">＋ 文字</button><button id="addMark">＋ マーク</button><button id="addAnim">＋ コマアニメ</button>
+        </div>
+        <div class="hint">シーンを押すと設定とプレビューが切り替わります。上から順に流れます。<br>
+          ヘッダー/フッターは左のチェックで使う・使わないを切り替え、右で出す間隔を選びます。</div>
+      </div>
+
+      <div class="panel">
+        <h2>シーンの設定 — <span id="fKind"></span></h2>
+        <div class="row"><span class="g">素材</span>
+          <select id="fKindSel"><option value="text">文字</option><option value="mark">マーク</option><option value="anim">コマアニメ</option></select></div>
+        <div data-k="text">
+          <textarea id="fText" rows="2" maxlength="300" placeholder="表示する文字"></textarea>
+          <div class="row"><span class="g">字の大きさ</span>
+            <select id="fSize"><option value="16">16ドット (1行)</option><option value="8">8ドット (2行まで)</option></select>
+            <label><input type="checkbox" id="fBold"> 太く</label></div>
+          <div class="hint" id="fSizeNote"></div>
+        </div>
+        <div data-k="mark">
+          <div class="row"><canvas id="fMarkPv" width="64" height="64" style="background:#000;border-radius:6px"></canvas>
+            <span class="lbl" id="fMarkName"></span></div>
+        </div>
+        <div data-k="anim">
+          <div id="fFrames"></div>
+          <div class="row"><span class="g">コマ送り</span><input type="range" id="fFps" min="1" max="30"><span class="val" id="v_fps"></span></div>
+        </div>
+        <div data-k="mark anim" class="row">
+          <select id="fLib"></select>
+          <button id="fFromEd" title="「マークを作る」で描いている絵を使います">マーク画面の絵を使う</button>
+        </div>
+
+        <div class="row" id="rowIn"><span class="g">入り方</span><select id="fIn"></select></div>
+        <div class="row"><span class="g">見せ方</span><select id="fShow"></select></div>
+        <div class="row" id="rowOut"><span class="g">出方</span><select id="fOut"></select></div>
+        <div class="hint" id="scrollNote" style="display:none">流す見せ方は、端から入って端へ抜けるので入り方・出方は使いません。</div>
+        <div class="row"><span class="g">はやさ</span><input type="range" id="f_speed" min="1" max="10"><span class="val" id="v_speed"></span></div>
+        <div class="row" id="rowHold"><span class="g">見せる時間</span><input type="range" id="f_hold" min="0.5" max="10" step="0.5"><span class="val" id="v_hold"></span></div>
+        <div class="row" id="rowLoops"><span class="g">くりかえし</span><input type="range" id="f_loops" min="1" max="10"><span class="val" id="v_loops"></span></div>
+        <div class="row"><span class="g">明るさ</span><input type="range" id="f_bri" min="1" max="16"><span class="val" id="v_bri"></span></div>
+      </div>
+
+      <div class="panel">
+        <h2>保存と書き出し</h2>
+        <div class="grp">
+          <button id="progExp">番組を書き出す</button>
+          <button id="progImp">番組を読み込む</button>
+          <input type="file" id="progFile" accept=".json" hidden>
+          <button id="progBin" title="本体で単体再生するためのコマ列 (.hxm)">コマ列を書き出す</button>
+          <button id="progNew" class="warn">見本に戻す</button>
+        </div>
+        <div class="hint">番組はこのブラウザに自動で保存されます。コマ列 (.hxm) は本体だけで流すためのファイルで、microSD の hexa フォルダに入れても使えます。</div>
+      </div>
+
+      <div class="panel">
+        <h2>本体の番組 (microSD)</h2>
+        <div class="grp"><span class="lbl" id="devStore">未接続</span>
+          <button id="devRefresh" disabled>一覧を更新</button>
+          <button id="devPause" disabled title="本体で流している番組を止めます">本体を止める</button></div>
+        <div id="devList"></div>
+        <div class="grp" style="margin-top:10px">
+          <input type="text" id="devName" maxlength="40" placeholder="01_program.hxm" style="flex:1 1 140px" aria-label="本体に保存する名前">
+          <button id="devSave" class="primary" disabled>この番組を本体に保存</button>
+        </div>
+        <div id="devProg" style="display:none"><div id="devBar"></div></div>
+        <div class="hint">本体は名前の順に番組を並べ、A/C で切り替えます。名前に使えるのは英数字と _ - だけです。<br>
+          「実機にも流す」がオンの間はプレビューが優先され、止めて3秒たつと本体の番組に戻ります。</div>
+      </div>
+    </div>
+  </div>
+  </section>
+</div>
+
+
+<div id="toast"></div>
+<div id="modal">
+  <div class="mbox">
+    <h2 style="font-size:14px;margin:0 0 4px">画像 → 16×16</h2>
+    <div class="lbl" style="margin-bottom:10px">緑の枠を動かして、右のLED表示がいちばん分かりやすくなる所を探してください。</div>
+    <div class="mcols">
+      <div>
+        <div id="cropWrap"><canvas id="cropCv"></canvas><div id="cropBox"></div></div>
+        <div class="row"><span class="g">枠の大きさ</span>
+          <input type="range" id="cSize" min="10" max="100" value="100">
+          <button id="cFit" title="絵のある範囲を探して、16×16いっぱいに写します">絵に合わせる</button>
+          <button id="cAll">全体</button></div>
+      </div>
+      <div>
+        <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <canvas id="impPv" width="176" height="176"></canvas>
+          <div class="lbl">点灯 <b id="impLit" style="color:var(--text)">0</b> / 256<br><span id="impNote"></span></div>
+        </div>
+        <div class="row"><span class="g">作り方</span>
+          <select id="mMode">
+            <option value="th">面 (くっきり2値)</option>
+            <option value="edge">輪郭 (外周だけ)</option>
+            <option value="bayer">網点 (写真向け・規則的)</option>
+            <option value="fs">誤差拡散 (写真向け・なめらか)</option>
+          </select></div>
+        <div class="row"><span class="g">光らせる側</span>
+          <select id="mPol">
+            <option value="auto">自動</option>
+            <option value="bright">明るい所</option>
+            <option value="dark">暗い所</option>
+          </select>
+          <label id="alphaWrap" style="display:none"><input type="checkbox" id="mAlpha" checked> 透明部分で形をとる</label></div>
+        <div class="row"><span class="g">しきい値</span>
+          <label><input type="checkbox" id="mAuto" checked> 自動</label>
+          <input type="range" id="mTh" min="1" max="254" value="128" disabled>
+          <span class="val" id="mThV">-</span></div>
+        <div class="row"><span class="g">コントラスト</span>
+          <input type="range" id="mCon" min="50" max="300" value="100">
+          <span class="val" id="mConV">100%</span></div>
+        <div class="row"><span class="g">仕上げ</span>
+          <label><input type="checkbox" id="mSpeck"> 孤立した点を消す</label></div>
+        <div class="hint">
+          ロゴやピクトグラムは「面」か「輪郭」、写真は「網点」か「誤差拡散」が向きます。<br>
+          16×16では細い線が消えやすいので、消えるときはしきい値を動かすか枠を小さくして大きく写してください。
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button id="mCancel" class="warn">キャンセル</button>
+      <button id="mOk" class="primary">これで取り込む</button>
+    </div>
+  </div>
+</div>
+
+<!-- ドットフォント: 東雲16 (Public Domain) / 美咲ゴシック8 (フリー)。tools/mkfont.py で生成 -->
+<script id="fontdata" type="application/json">@@FONTDATA@@</script>
+<script>
+"use strict";
+const N=16, NN=N*N;
+const $=id=>document.getElementById(id);
+let grid=new Uint8Array(NN);
+
+// ============================================================
+// 変換の本体 (DOMに触れない。CPZ側のエンジンへ移すときもこのまま使える)
+// ============================================================
+/// 大津の方法: 明暗の2山がいちばんよく分かれる値を探す
+function otsu(v){
+  const h=new Array(256).fill(0);
+  for(let i=0;i<v.length;i++) h[Math.max(0,Math.min(255,Math.round(v[i])))]++;
+  let sum=0; for(let i=0;i<256;i++) sum+=i*h[i];
+  let wB=0,sumB=0,best=-1,th=128;
+  // 同点が続く区間 (白黒だけの画像など) は真ん中を採る。端だと枠外の値に弱い。
+  let lo=-1,hi=-1;
+  for(let t=0;t<256;t++){
+    wB+=h[t]; if(!wB) continue;
+    const wF=v.length-wB; if(!wF) break;
+    sumB+=t*h[t];
+    const mB=sumB/wB, mF=(sum-sumB)/wF, s=wB*wF*(mB-mF)*(mB-mF);
+    if(s>best+1e-9){ best=s; lo=hi=t; }
+    else if(Math.abs(s-best)<=1e-9) hi=t;
+  }
+  if(lo>=0) th=(lo+hi)/2+0.5;
+  return th;
+}
+function despeckle(b){
+  const o=b.slice();
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    if(!b[y*N+x]) continue;
+    let n=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+      if(!dx&&!dy) continue;
+      const xx=x+dx,yy=y+dy;
+      if(xx>=0&&xx<N&&yy>=0&&yy<N&&b[yy*N+xx]) n++;
+    }
+    if(!n) o[y*N+x]=0;
+  }
+  return o;
+}
+/// 上下左右のどれかが消灯 (または枠の外) の点だけ残す
+function outlineOf(b){
+  const o=new Uint8Array(NN);
+  const on=(x,y)=>x>=0&&x<N&&y>=0&&y<N&&b[y*N+x];
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++)
+    if(b[y*N+x] && !(on(x-1,y)&&on(x+1,y)&&on(x,y-1)&&on(x,y+1))) o[y*N+x]=1;
+  return o;
+}
+const BAYER=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+/// 明るさ(または不透明度)の配列にして、光らせる側をそろえる。n×n の RGBA ならどの大きさでも使える。
+function prep(rgba,n,opt){
+  const nn=n*n;
+  let hasAlpha=false;
+  for(let i=0;i<nn;i++) if(rgba[i*4+3]<250){ hasAlpha=true; break; }
+  const useA=hasAlpha && opt.useAlpha;
+  const v=new Float32Array(nn);
+  for(let i=0;i<nn;i++){
+    const a=rgba[i*4+3]/255;
+    if(useA) v[i]=a*255;                       // 透明=消灯、不透明=点灯 (色は見ない)
+    else{
+      const l=0.299*rgba[i*4]+0.587*rgba[i*4+1]+0.114*rgba[i*4+2];
+      v[i]=hasAlpha ? l*a+255*(1-a) : l;       // 透明は白い紙とみなす
+    }
+  }
+  // 光らせる側。自動のときは四辺を見て、地が明るければ「暗い所を光らせる」。
+  let invert=false;
+  if(opt.pol==="dark") invert=true;
+  else if(opt.pol==="auto" && !useA){
+    const t0=otsu(v); let br=0,tot=0;
+    for(let k=0;k<n;k++){
+      for(const i of [k,(n-1)*n+k,k*n,k*n+n-1]){ if(v[i]>=t0) br++; tot++; }
+    }
+    invert = br/tot>0.6;
+  }
+  if(invert) for(let i=0;i<nn;i++) v[i]=255-v[i];
+  return {v:v, invert:invert, hasAlpha:hasAlpha};
+}
+/// rgba: 16×16 の RGBA。opt: {mode,pol,th(null=自動),useAlpha,contrast,speck}
+function convert(rgba,opt){
+  const pr=prep(rgba,N,opt), v=pr.v, invert=pr.invert, hasAlpha=pr.hasAlpha;
+  const c=(opt.contrast||100)/100;
+  if(c!==1) for(let i=0;i<NN;i++) v[i]=Math.max(0,Math.min(255,(v[i]-128)*c+128));
+  const th=(opt.th==null)?otsu(v):opt.th;
+
+  let b=new Uint8Array(NN);
+  if(opt.mode==="bayer"){
+    for(let i=0;i<NN;i++){
+      const x=i%N,y=(i/N)|0;
+      b[i]= v[i] >= th+((BAYER[y&3][x&3]+0.5)/16-0.5)*150 ? 1:0;
+    }
+  }else if(opt.mode==="fs"){
+    const e=Float32Array.from(v);
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+      const i=y*N+x, on=e[i]>=th?1:0, err=e[i]-(on?255:0);
+      b[i]=on;
+      if(x+1<N) e[i+1]+=err*7/16;
+      if(y+1<N){ if(x>0) e[i+N-1]+=err*3/16; e[i+N]+=err*5/16; if(x+1<N) e[i+N+1]+=err/16; }
+    }
+  }else{
+    for(let i=0;i<NN;i++) b[i]= v[i]>=th ? 1:0;
+    if(opt.mode==="edge") b=outlineOf(b);
+  }
+  if(opt.speck) b=despeckle(b);
+  return {bits:b, th:th, invert:invert, hasAlpha:hasAlpha};
+}
+/// 1行=16bit、bit15が左端
+function toRows(b){ const r=[]; for(let y=0;y<N;y++){ let w=0; for(let x=0;x<N;x++) if(b[y*N+x]) w|=(0x8000>>x); r.push(w); } return r; }
+function fromRows(r){ const b=new Uint8Array(NN); for(let y=0;y<N;y++)for(let x=0;x<N;x++) if((r[y]|0)&(0x8000>>x)) b[y*N+x]=1; return b; }
+/// 送信用の1コマ=32バイト (行順、各行は左8点→右8点、MSBが左)
+function toBytes(b){ const o=new Uint8Array(32); toRows(b).forEach((w,y)=>{ o[y*2]=w>>8; o[y*2+1]=w&255; }); return o; }
+
+// ============================================================
+// 編集グリッド
+// ============================================================
+const gridEl=$("grid"), cells=[];
+for(let i=0;i<NN;i++){ const d=document.createElement("div"); d.className="c"; d.dataset.i=i; gridEl.appendChild(d); cells.push(d); }
+
+function drawLed(cv,b,bg){
+  const g=cv.getContext("2d"), s=cv.width/N;
+  g.fillStyle=bg||"#000"; g.fillRect(0,0,cv.width,cv.height);
+  for(let i=0;i<NN;i++){
+    g.fillStyle=b[i]?"#fff":"#1b1f26";
+    g.beginPath(); g.arc((i%N+.5)*s,(((i/N)|0)+.5)*s,s*.36,0,6.2832); g.fill();
+  }
+}
+function render(){
+  let n=0;
+  for(let i=0;i<NN;i++){ cells[i].classList.toggle("on",!!grid[i]); n+=grid[i]; }
+  $("litN").textContent=n;
+  drawLed($("pv"),grid);
+  renderOut();
+  liveSend(grid);
+}
+
+let hist=[],hpos=-1;
+function push(){
+  hist=hist.slice(0,hpos+1); hist.push(grid.slice());
+  if(hist.length>80) hist.shift();
+  hpos=hist.length-1; syncHist();
+}
+function syncHist(){ $("undo").disabled=hpos<=0; $("redo").disabled=hpos>=hist.length-1; }
+function setGrid(b,rec){ grid=Uint8Array.from(b); render(); if(rec!==false) push(); }
+$("undo").onclick=()=>{ if(hpos>0){ grid=hist[--hpos].slice(); render(); syncHist(); } };
+$("redo").onclick=()=>{ if(hpos<hist.length-1){ grid=hist[++hpos].slice(); render(); syncHist(); } };
+
+let painting=false, paintVal=1, lastI=-1;
+function cellAt(e){ const el=document.elementFromPoint(e.clientX,e.clientY); return (el&&el.parentElement===gridEl)?+el.dataset.i:-1; }
+function line(a,b,fn){            // 速くなぞっても点が飛ばないよう間を埋める
+  let x0=a%N,y0=(a/N)|0; const x1=b%N,y1=(b/N)|0;
+  const dx=Math.abs(x1-x0),dy=Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1; let err=dx-dy;
+  for(;;){ fn(y0*N+x0); if(x0===x1&&y0===y1) break; const e2=2*err; if(e2>-dy){err-=dy;x0+=sx;} if(e2<dx){err+=dx;y0+=sy;} }
+}
+gridEl.addEventListener("pointerdown",e=>{
+  const i=cellAt(e); if(i<0) return; e.preventDefault();
+  paintVal=grid[i]?0:1; painting=true; lastI=i; grid[i]=paintVal; render();
+  try{ gridEl.setPointerCapture(e.pointerId); }catch(_){}
+});
+gridEl.addEventListener("pointermove",e=>{
+  if(!painting) return; const i=cellAt(e); if(i<0||i===lastI) return;
+  line(lastI,i,k=>{ grid[k]=paintVal; }); lastI=i; render();
+});
+const endPaint=()=>{ if(painting){ painting=false; push(); } };
+gridEl.addEventListener("pointerup",endPaint); gridEl.addEventListener("pointercancel",endPaint);
+
+function xform(fn){ const o=new Uint8Array(NN); for(let y=0;y<N;y++)for(let x=0;x<N;x++){ const [nx,ny]=fn(x,y); o[ny*N+nx]=grid[y*N+x]; } setGrid(o); }
+function shift(dx,dy){
+  const w=$("wrap").checked, o=new Uint8Array(NN);
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    let nx=x+dx,ny=y+dy;
+    if(w){ nx=(nx+N)%N; ny=(ny+N)%N; } else if(nx<0||nx>=N||ny<0||ny>=N) continue;
+    o[ny*N+nx]=grid[y*N+x];
+  }
+  setGrid(o);
+}
+$("inv").onclick=()=>setGrid(grid.map(v=>v?0:1));
+$("flipH").onclick=()=>xform((x,y)=>[N-1-x,y]);
+$("flipV").onclick=()=>xform((x,y)=>[x,N-1-y]);
+$("rot").onclick=()=>xform((x,y)=>[N-1-y,x]);
+$("sL").onclick=()=>shift(-1,0); $("sR").onclick=()=>shift(1,0);
+$("sU").onclick=()=>shift(0,-1); $("sD").onclick=()=>shift(0,1);
+$("speck").onclick=()=>setGrid(despeckle(grid));
+$("outline").onclick=()=>setGrid(outlineOf(grid));
+$("clear").onclick=()=>setGrid(new Uint8Array(NN));
+window.addEventListener("keydown",e=>{
+  if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="z"){ e.preventDefault(); (e.shiftKey?$("redo"):$("undo")).click(); }
+  else if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="y"){ e.preventDefault(); $("redo").click(); }
+});
+
+// ============================================================
+// CoreMatrix へ送る (WebSerial)。パケットの形はファームの hxm_proto.h と同じ。
+//   A5 5A <type> <len> <payload> <crc8>   crc8 = type,len,payload の CRC-8 (0x07)
+// ============================================================
+const HXM={FRAME:1,BRIGHT:2,PING:3,ROTATE:4};
+function crc8(c,b){ c^=b; for(let i=0;i<8;i++) c=(c&0x80)?((c<<1)^0x07)&255:(c<<1)&255; return c; }
+function packet(type,payload){
+  const p=payload||[], o=new Uint8Array(5+p.length);
+  o[0]=0xA5; o[1]=0x5A; o[2]=type; o[3]=p.length;
+  let c=crc8(crc8(0,type),p.length);
+  for(let i=0;i<p.length;i++){ o[4+i]=p[i]; c=crc8(c,p[i]); }
+  o[4+p.length]=c;
+  return o;
+}
+let port=null, writer=null, reader=null, devRot=1, pendFrame=null, txBusy=false;
+function log(msg,cls){
+  const el=$("log"), d=document.createElement("div"); if(cls) d.className=cls; d.textContent=msg;
+  el.appendChild(d); while(el.children.length>60) el.firstChild.remove(); el.scrollTop=el.scrollHeight;
+}
+function setConn(on){
+  $("cdot").classList.toggle("on",on); $("cstate").textContent=on?"接続中":"未接続";
+  $("conn").textContent=on?"切断":"接続";
+  for(const id of ["send","bri","rotDev"]) $(id).disabled=!on;
+  if(!on){ devList=null; devFw=""; for(const w of waiters){ clearTimeout(w.t); w.rej(new Error("切断されました")); } waiters=[]; devBusy=false; }
+  if(typeof devRender==="function") devRender();
+}
+async function tx(bytes){ if(!writer) return false; try{ await writer.write(bytes); return true; }catch(e){ log("送信失敗: "+e.message,"err"); return false; } }
+/// 連続で呼ばれても、送るのは常に「いちばん新しい絵」だけ (なぞっている間に溜めない)
+function queueFrame(b){
+  if(!writer) return;
+  pendFrame=packet(HXM.FRAME,toBytes(b));
+  if(txBusy) return;
+  txBusy=true;
+  (async()=>{ while(pendFrame&&writer){ const p=pendFrame; pendFrame=null; await tx(p); } txBusy=false; })();
+}
+function liveSend(b){ if(curView==="mark" && $("live").checked) queueFrame(b); }
+async function readLoop(){
+  const dec=new TextDecoder(); let buf="";
+  try{
+    while(reader){
+      const {value,done}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let nl; while((nl=buf.indexOf("\n"))>=0){ const ln=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(ln) onLine(ln); }
+    }
+  }catch(e){ if(port) log("受信が止まりました: "+e.message,"err"); }
+}
+function onLine(ln){
+  let j=null; try{ j=JSON.parse(ln); }catch(e){}
+  if(!j){ log("本体: "+ln); return; }
+  if(typeof deliverReply==="function") deliverReply(j);
+  if(j.ack!==undefined || j.saved!==undefined) return;            // 送信中の返事はログに出さない
+  if(j.list){ devList=j; devRender(); return; }
+  if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
+  if(j.bench_us!==undefined){ log("速度計測: 1コマ "+(j.bench_us/1000).toFixed(1)+"ms (最大 約"+j.fps_max+"コマ/秒)","ok"); return; }
+  if(j.dev){
+    if(typeof j.rot==="number") devRot=j.rot&3;
+    if(typeof j.bri==="number"){ const lv=Math.max(1,Math.min(16,(j.bri>>4)+1)); $("bri").value=lv; $("briV").textContent=lv+"/16"; }
+    log("本体: ファーム"+j.fw+(j.store?" / 保存先 "+({sd:"microSD",flash:"本体メモリ",none:"なし"}[j.store]||j.store)+" "+j.n+"番組":"")
+        +(j.rx_ok!==undefined?" / 受信"+j.rx_ok+"件":"")+(j.rx_bad?" (壊れ"+j.rx_bad+"件)":""),"ok");
+    if(j.fw){ devFw=j.fw; devRender(); }
+    if(fwOld()) log("本体のファームが v"+j.fw+" なので、本体の番組は使えません (v0.3.0 以上を書き込んでください)","err");
+    return;
+  }
+  log("本体: "+ln);
+}
+async function disconnect(){
+  const r=reader, w=writer, p=port; reader=writer=port=null; pendFrame=null;
+  try{ r&&await r.cancel(); }catch(e){} try{ r&&r.releaseLock(); }catch(e){}
+  try{ w&&w.releaseLock(); }catch(e){} try{ p&&await p.close(); }catch(e){}
+  setConn(false); log("切断しました");
+}
+$("conn").onclick=async()=>{
+  if(port){ await disconnect(); return; }
+  try{
+    const p=await navigator.serial.requestPort();
+    await p.open({baudRate:115200});
+    port=p; writer=p.writable.getWriter(); reader=p.readable.getReader();
+    setConn(true); log("接続しました","ok");
+    readLoop();
+    await tx(packet(HXM.PING));
+    if(curView==="mark") queueFrame(grid);
+    setTimeout(()=>{ if(writer) devRefresh(); },400);
+  }catch(e){ if(e.name!=="NotFoundError") log("接続失敗: "+e.message,"err"); port=writer=reader=null; setConn(false); }
+};
+$("send").onclick=()=>{ queueFrame(grid); log("送りました (32バイト)","ok"); };
+$("bri").oninput=e=>{ const lv=+e.target.value; $("briV").textContent=lv+"/16"; tx(packet(HXM.BRIGHT,[lv*16-1])); };
+$("rotDev").onclick=()=>{ devRot=(devRot+1)&3; tx(packet(HXM.ROTATE,[devRot])); };
+if(!("serial" in navigator)){ $("conn").disabled=true; $("noSerial").style.display="block"; }
+if(navigator.serial&&navigator.serial.addEventListener)
+  navigator.serial.addEventListener("disconnect",e=>{ if(port&&e.target===port){ disconnect(); log("ケーブルが抜けました","err"); } });
+
+let stT=0;
+function status(msg,cls){
+  for(const id of ["status","toast"]){ const s=$(id); s.textContent=msg; s.className=(cls||"")+(id==="toast"?" show":""); }
+  clearTimeout(stT); stT=setTimeout(()=>{ $("status").textContent=""; $("toast").className=""; },3500);
+}
+
+// ============================================================
+// 画像取込
+//   読み込んだ画像は、いったん「長辺に合わせた正方形」の作業キャンバスへ中央に置く。
+//   こうすると横長のロゴでも枠100%で全体が入る (余白は透明=消灯)。
+// ============================================================
+let src=null, crop={x:0,y:0,s:0}, disp=320, impRes=null;
+const cropCv=$("cropCv"), cropBox=$("cropBox");
+
+function openImage(blob){
+  const img=new Image(), url=URL.createObjectURL(blob);
+  img.onload=()=>{
+    URL.revokeObjectURL(url);
+    const side0=Math.max(img.width,img.height), k=Math.min(1,1400/side0);   // 大きすぎる写真は先に縮める
+    const side=Math.max(N,Math.round(side0*k)), w=Math.round(img.width*k), h=Math.round(img.height*k);
+    src=document.createElement("canvas"); src.width=src.height=side;
+    const g=src.getContext("2d"); g.imageSmoothingQuality="high";
+    // 余白の色: 画像が不透明なら四隅の色でならす (白地のロゴに黒い余白が付くのを防ぐ)
+    const t=document.createElement("canvas"); t.width=w; t.height=h;
+    const tg=t.getContext("2d"); tg.imageSmoothingQuality="high"; tg.drawImage(img,0,0,w,h);
+    const cs=[[0,0],[w-1,0],[0,h-1],[w-1,h-1]].map(([x,y])=>tg.getImageData(x,y,1,1).data);
+    if(cs.every(c=>c[3]>250)){
+      const m=[0,1,2].map(j=>Math.round(cs.reduce((a,c)=>a+c[j],0)/4));
+      g.fillStyle="rgb("+m.join(",")+")"; g.fillRect(0,0,side,side);
+    }
+    g.drawImage(t,Math.round((side-w)/2),Math.round((side-h)/2));
+    disp=Math.max(180,Math.min(340,window.innerWidth-60));
+    cropCv.width=cropCv.height=disp;
+    const cg=cropCv.getContext("2d"); cg.imageSmoothingQuality="high"; cg.drawImage(src,0,0,disp,disp);
+    $("cSize").value=100; crop={x:0,y:0,s:disp};
+    $("mAuto").checked=true; $("mTh").disabled=true; $("mCon").value=100; $("mConV").textContent="100%";
+    $("mPol").value="auto"; $("mSpeck").checked=false; $("mAlpha").checked=true;
+    $("modal").classList.add("show");
+    autoFit();
+  };
+  img.onerror=()=>{ URL.revokeObjectURL(url); status("画像を開けませんでした","err"); };
+  img.src=url;
+}
+/// 半分ずつ縮めて細部を平均しながら16×16へ
+function downsample(sx,sy,ss){
+  let cur=document.createElement("canvas");
+  let w=Math.max(N,Math.round(ss)); cur.width=cur.height=w;
+  let g=cur.getContext("2d"); g.imageSmoothingEnabled=true; g.imageSmoothingQuality="high";
+  g.drawImage(src,sx,sy,ss,ss,0,0,w,w);
+  while(w>N*2){
+    const nw=Math.max(N,w>>1), nx=document.createElement("canvas"); nx.width=nx.height=nw;
+    const ng=nx.getContext("2d"); ng.imageSmoothingEnabled=true; ng.imageSmoothingQuality="high";
+    ng.drawImage(cur,0,0,nw,nw); cur=nx; w=nw;
+  }
+  const f=document.createElement("canvas"); f.width=f.height=N;
+  const fg=f.getContext("2d"); fg.imageSmoothingEnabled=true; fg.imageSmoothingQuality="high";
+  fg.drawImage(cur,0,0,N,N);
+  return fg.getImageData(0,0,N,N).data;
+}
+function impOpt(){
+  return {mode:$("mMode").value, pol:$("mPol").value, th:$("mAuto").checked?null:+$("mTh").value,
+          useAlpha:$("mAlpha").checked, contrast:+$("mCon").value, speck:$("mSpeck").checked};
+}
+function updCrop(){
+  crop.s=Math.max(8,Math.min(crop.s,disp));
+  crop.x=Math.max(0,Math.min(crop.x,disp-crop.s));
+  crop.y=Math.max(0,Math.min(crop.y,disp-crop.s));
+  cropBox.style.left=crop.x+"px"; cropBox.style.top=crop.y+"px";
+  cropBox.style.width=cropBox.style.height=crop.s+"px";
+  if(!src) return;
+  const k=src.width/disp;
+  impRes=convert(downsample(crop.x*k,crop.y*k,crop.s*k),impOpt());
+  drawLed($("impPv"),impRes.bits);
+  liveSend(impRes.bits);                       // 枠を動かしている間も実機に映す
+  let n=0; for(let i=0;i<NN;i++) n+=impRes.bits[i];
+  $("impLit").textContent=n;
+  $("alphaWrap").style.display=impRes.hasAlpha?"flex":"none";
+  $("mThV").textContent=Math.round(impRes.th);
+  if($("mAuto").checked) $("mTh").value=Math.round(impRes.th);
+  $("impNote").textContent = n===0 ? "何も点いていません。光らせる側かしきい値を変えてください"
+    : n===NN ? "全部点いています。光らせる側かしきい値を変えてください"
+    : (impRes.invert ? "暗い所を光らせています" : "");
+}
+/// 絵のある範囲を探して枠を合わせる。16×16は余白がもったいないので、開いた直後にも1回かける。
+function autoFit(){
+  const M=64, t=document.createElement("canvas"); t.width=t.height=M;
+  const g=t.getContext("2d"); g.imageSmoothingQuality="high"; g.drawImage(src,0,0,M,M);
+  const pr=prep(g.getImageData(0,0,M,M).data,M,{pol:$("mPol").value,useAlpha:$("mAlpha").checked});
+  const th=$("mAuto").checked?otsu(pr.v):+$("mTh").value;
+  let x0=M,y0=M,x1=-1,y1=-1;
+  for(let y=0;y<M;y++)for(let x=0;x<M;x++) if(pr.v[y*M+x]>=th){
+    if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+  }
+  let s=disp, cx=disp/2, cy=disp/2;
+  if(x1>=0){
+    const side=Math.max(x1-x0+1,y1-y0+1)*1.14;          // まわりに少しだけ余白を残す
+    if(side<M*0.94){ s=side*disp/M; cx=(x0+x1+1)/2*disp/M; cy=(y0+y1+1)/2*disp/M; }
+  }
+  crop={x:cx-s/2,y:cy-s/2,s:s};
+  $("cSize").value=Math.round(Math.min(100,s/disp*100));
+  updCrop();
+}
+$("cFit").onclick=autoFit;
+let cdrag=null;
+cropBox.addEventListener("pointerdown",e=>{ cdrag={px:e.clientX,py:e.clientY,ox:crop.x,oy:crop.y}; cropBox.setPointerCapture(e.pointerId); e.preventDefault(); });
+cropBox.addEventListener("pointermove",e=>{ if(!cdrag) return; crop.x=cdrag.ox+e.clientX-cdrag.px; crop.y=cdrag.oy+e.clientY-cdrag.py; updCrop(); });
+cropBox.addEventListener("pointerup",()=>cdrag=null); cropBox.addEventListener("pointercancel",()=>cdrag=null);
+$("cSize").oninput=e=>{ const cx=crop.x+crop.s/2, cy=crop.y+crop.s/2; crop.s=disp*e.target.value/100; crop.x=cx-crop.s/2; crop.y=cy-crop.s/2; updCrop(); };
+$("cAll").onclick=()=>{ $("cSize").value=100; crop={x:0,y:0,s:disp}; updCrop(); };
+for(const id of ["mMode","mPol","mAlpha","mSpeck"]) $(id).onchange=updCrop;
+$("mAuto").onchange=e=>{ $("mTh").disabled=e.target.checked; updCrop(); };
+$("mTh").oninput=updCrop;
+$("mCon").oninput=e=>{ $("mConV").textContent=e.target.value+"%"; updCrop(); };
+function closeModal(){ $("modal").classList.remove("show"); src=null; impRes=null; }
+$("mCancel").onclick=()=>{ closeModal(); liveSend(grid); };   // 実機を元の絵へ戻す
+$("mOk").onclick=()=>{ if(impRes){ setGrid(impRes.bits); status("画像から取り込みました","ok"); } closeModal(); };
+
+$("impBtn").onclick=()=>$("impFile").click();
+$("impFile").onchange=e=>{ const f=e.target.files[0]; if(f) openImage(f); e.target.value=""; };
+window.addEventListener("paste",e=>{
+  const it=[...(e.clipboardData?e.clipboardData.items:[])].find(v=>v.type.indexOf("image/")===0);
+  if(it){ e.preventDefault(); openImage(it.getAsFile()); }
+});
+let dragN=0;
+window.addEventListener("dragenter",e=>{ if(e.dataTransfer&&[...e.dataTransfer.types].includes("Files")){ dragN++; document.body.classList.add("drop"); } });
+window.addEventListener("dragleave",()=>{ if(--dragN<=0){ dragN=0; document.body.classList.remove("drop"); } });
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("drop",e=>{
+  e.preventDefault(); dragN=0; document.body.classList.remove("drop");
+  const f=[...(e.dataTransfer?e.dataTransfer.files:[])].find(v=>v.type.indexOf("image/")===0);
+  if(f) openImage(f);
+});
+
+// ============================================================
+// マーク置き場 (localStorage。使えない環境ではメモリだけで動く)
+// ============================================================
+const LIB_KEY="hexa_matrix_marks_v1";
+let lib=[];
+function store(){ try{ localStorage.setItem("__p","1"); localStorage.removeItem("__p"); return localStorage; }catch(e){ return null; } }
+function libLoad(){ const s=store(); if(!s) return; try{ const j=JSON.parse(s.getItem(LIB_KEY)||"[]"); if(Array.isArray(j)) lib=j.filter(okItem); }catch(e){} }
+function libPersist(){ const s=store(); if(!s) return false; try{ s.setItem(LIB_KEY,JSON.stringify(lib)); return true; }catch(e){ return false; } }
+function okItem(v){ return v && typeof v.name==="string" && Array.isArray(v.rows) && v.rows.length===N; }
+function libRender(){
+  const el=$("lib"); el.innerHTML="";
+  if(!lib.length){ const d=document.createElement("div"); d.className="empty"; d.style.gridColumn="1/-1"; d.textContent="まだ何もありません。描くか取り込んで、名前をつけて保存してください。"; el.appendChild(d); return; }
+  for(const it of lib){
+    const c=document.createElement("div"); c.className="card"; c.title=it.name;
+    const cv=document.createElement("canvas"); cv.width=cv.height=96; drawLed(cv,fromRows(it.rows)); c.appendChild(cv);
+    const nm=document.createElement("div"); nm.className="nm"; nm.textContent=it.name; c.appendChild(nm);
+    const del=document.createElement("button"); del.className="warn"; del.textContent="消す";
+    del.onclick=e=>{ e.stopPropagation(); if(!confirm("「"+it.name+"」を消します。よろしいですか？")) return; lib=lib.filter(v=>v!==it); libPersist(); libRender(); };
+    c.appendChild(del);
+    c.onclick=()=>{ setGrid(fromRows(it.rows)); $("name").value=it.name; status("呼び出しました: "+it.name,"ok"); };
+    el.appendChild(c);
+  }
+}
+$("save").onclick=()=>{
+  const nm=$("name").value.trim();
+  if(!nm){ status("マーク名を入れてください","err"); $("name").focus(); return; }
+  const rec={name:nm,w:N,h:N,rows:toRows(grid),ts:Date.now()};
+  const i=lib.findIndex(v=>v.name===nm);
+  if(i>=0) lib[i]=rec; else lib.unshift(rec);
+  const ok=libPersist(); libRender(); if(typeof libOptions==="function") libOptions();
+  status((i>=0?"上書きしました: ":"保存しました: ")+nm+(ok?"":" (このブラウザには残りません。書き出しておいてください)"),ok?"ok":"err");
+};
+$("name").addEventListener("keydown",e=>{ if(e.key==="Enter") $("save").click(); });
+function download(name,blob){ const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),2000); }
+$("libExp").onclick=()=>{
+  if(!lib.length){ status("書き出すマークがありません","err"); return; }
+  download("hexa_matrix_marks_"+lib.length+".json",new Blob([JSON.stringify({format:"hexa-matrix-marks",version:1,items:lib})],{type:"application/json"}));
+  status(lib.length+"件を書き出しました","ok");
+};
+$("libImp").onclick=()=>$("libFile").click();
+$("libFile").onchange=async e=>{
+  const f=e.target.files[0]; e.target.value=""; if(!f) return;
+  try{
+    const j=JSON.parse(await f.text()), arr=Array.isArray(j)?j:j.items;
+    if(!Array.isArray(arr)) throw new Error("マークの一覧が見つかりません");
+    let add=0,skip=0;
+    for(const v of arr){
+      if(!okItem(v)){ skip++; continue; }
+      const rec={name:v.name,w:N,h:N,rows:v.rows.map(x=>(x|0)&0xffff),ts:v.ts||Date.now()};
+      const i=lib.findIndex(x=>x.name===rec.name);
+      if(i>=0) lib[i]=rec; else lib.unshift(rec);
+      add++;
+    }
+    libPersist(); libRender();
+    status(add+"件を読み込みました"+(skip?" ("+skip+"件は形式が合わず読み飛ばし)":""),add?"ok":"err");
+  }catch(err){ status("読み込み失敗: "+err.message,"err"); }
+};
+
+// ============================================================
+// 出力
+// ============================================================
+let tab="c";
+const hex=(v,n)=>"0x"+v.toString(16).toUpperCase().padStart(n,"0");
+function ident(){ const s=$("name").value.trim().toLowerCase().replace(/[^a-z0-9_]/g,"_").replace(/^_+|_+$/g,""); return (s&&!/^[0-9]/.test(s))?s:"mark"; }
+function outText(){
+  const rows=toRows(grid);
+  if(tab==="b"){
+    const b=[...toBytes(grid)].map(v=>v.toString(16).toUpperCase().padStart(2,"0"));
+    return "# 1コマ = 32バイト (上の行から。各行は左8点→右8点、MSBが左、1=点灯)\n"
+      +b.join(" ")+"\n\n# 行ごと\n"
+      +rows.map((w,y)=>b[y*2]+" "+b[y*2+1]+"  "+w.toString(2).padStart(16,"0").replace(/0/g,"·").replace(/1/g,"█")).join("\n");
+  }
+  if(tab==="j") return JSON.stringify({format:"hexa-matrix-mark",version:1,name:$("name").value.trim()||"mark",w:N,h:N,rows:rows},null,1);
+  const id=ident(), up=id.toUpperCase();
+  return "// 16x16 / 1=点灯 / bit15が左端\n"
+    +"const uint16_t "+up+"[16] = {\n"
+    +rows.map(w=>"  "+hex(w,4)+",  // "+w.toString(2).padStart(16,"0").replace(/0/g,"·").replace(/1/g,"█")).join("\n")
+    +"\n};\n\n// CoreMatrix (M5Unified) での描画例\n"
+    +"// for (int y = 0; y < 16; y++)\n//   for (int x = 0; x < 16; x++)\n"
+    +"//     M5.Display.drawPixel(x, y, ("+up+"[y] & (0x8000 >> x)) ? TFT_WHITE : TFT_BLACK);\n"
+    +"// M5.Display.display();";
+}
+function renderOut(){ $("out").textContent=outText(); }
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  tab=b.dataset.t; document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("sel",x===b)); renderOut();
+});
+$("name").addEventListener("input",renderOut);
+$("copy").onclick=async()=>{
+  const t=outText();
+  try{ await navigator.clipboard.writeText(t); }
+  catch(e){ const ta=document.createElement("textarea"); ta.value=t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
+  status("コピーしました","ok");
+};
+$("png").onclick=()=>{
+  const cv=document.createElement("canvas"); cv.width=cv.height=512; drawLed(cv,grid);
+  cv.toBlob(b=>download(ident()+"_16x16.png",b),"image/png");
+};
+
+/*@@ENGINE@@*/
+/*@@PROGRAM@@*/
+/*@@DEVICE@@*/
+libLoad(); libRender(); render(); push();
+progInit();
+</script>
+</body>
+</html>
