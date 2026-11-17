@@ -11,7 +11,7 @@ APPL=/usr/share/APPLaunch
 PORT=8090
 
 echo "== packages"
-sudo apt-get install -y python3-pil python3-numpy python3-qrcode >/dev/null
+sudo apt-get install -y python3-pil python3-numpy python3-qrcode libnss-mdns >/dev/null   # libnss-mdns: hexamatrix.local を引く
 
 echo "== files"
 chmod +x "$DIR/hmatrixd.py" "$DIR/hmatrix_app.py" "$DIR/hmatrix-app"

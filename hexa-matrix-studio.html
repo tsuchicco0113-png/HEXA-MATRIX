@@ -636,7 +636,7 @@ function onLine(ln){
   if(typeof deliverReply==="function") deliverReply(j);
   if(j.hub){                                                       // CPZ (hmatrixd) からの知らせ
     if(j.ok===false){ if(!waiters.length) log("CPZ: "+j.err,"err"); return; }
-    if(j.connected===false) log("CPZ: CoreMatrix がつながっていません (USB-SW を Host 側にして USB-A/C1 へ)","err");
+    if(j.connected===false) log("CPZ: CoreMatrix がつながっていません (USB なら USB-SW を Host 側にして USB-A/C1 へ。Wi-Fi なら SD の hexa/wifi.txt)","err");
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
   }
@@ -648,6 +648,7 @@ function onLine(ln){
     if(typeof j.rot==="number") devRot=j.rot&3;
     if(typeof j.bri==="number"){ const lv=Math.max(1,Math.min(16,(j.bri>>4)+1)); $("bri").value=lv; $("briV").textContent=lv+"/16"; }
     log("本体: ファーム"+j.fw+(j.store?" / 保存先 "+({sd:"microSD",flash:"本体メモリ",none:"なし"}[j.store]||j.store)+" "+j.n+"番組":"")
+        +(j.wifi==="ok"?" / Wi-Fi "+j.name+".local "+j.ip:j.wifi==="connecting"?" / Wi-Fi 接続中":"")
         +(j.rx_ok!==undefined?" / 受信"+j.rx_ok+"件":"")+(j.rx_bad?" (壊れ"+j.rx_bad+"件)":""),"ok");
     if(j.fw){ devFw=j.fw; devRender(); }
     if(fwOld()) log("本体のファームが v"+j.fw+" なので、本体の番組は使えません (v0.3.0 以上を書き込んでください)","err");

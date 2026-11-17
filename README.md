@@ -1,11 +1,11 @@
-# HEXA MATRIX (v0.4)
+# HEXA MATRIX (v0.5)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
 | ファイル | 役割 |
 |---|---|
 | `hexa-matrix-studio.html` | STUDIO。「マークを作る」と「番組を作る」の2画面。USBで実機に映す |
-| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.4。microSD の番組を自分で流す。USBで届いたコマも表示する |
+| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.5。microSD の番組を自分で流す。USBで届いたコマも表示する |
 | `cpz/` | CardputerZero 用。常駐ハブ (`hmatrixd.py`)、本体アプリ (`hmatrix_app.py`)、描画エンジンの Python 版 (`hxengine.py`) |
 | `src/` `build.py` | STUDIO の元ファイル。`python3 build.py` で1枚のHTMLに組み立てる |
 | `tools/mkfont.py` | ドットフォント (BDF) をSTUDIO用の表に変換する |
@@ -15,6 +15,8 @@ CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 1. Arduino IDE でボード **M5CoreMatrix** を選び、`firmware/HexaMatrixFW/HexaMatrixFW.ino` を開いて書き込む
    - M5Stack ボードマネージャ 3.3.10-a 以上、ライブラリ M5Unified / M5GFX
    - ツール → USB CDC On Boot は Enabled (既定)
+   - ツール → Partition Scheme は **No OTA (2MB APP/2MB SPIFFS)** (v0.5 から Wi-Fi が入って既定の 1.2MB に入らないため。
+     切り替えると本体フラッシュに保存した番組は消えます。microSD の番組はそのまま)
    - 書き込めないときは電源ボタン長押しでダウンロードモード
 2. 書き込めるとハートが出る。シリアルモニタは閉じる
 3. パソコンの Chrome / Edge で `hexa-matrix-studio.html` を開き、「接続」で CoreMatrix を選ぶ
@@ -41,7 +43,25 @@ CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 - v0.4 から、カードが読めないときは起動時やカードを入れた時に「SD」と出ます。STUDIO の「本体の番組」にも案内が出ます
   (一度 FAT32 のカードが読めると「カードが入っている」状態を覚えるので、それ以降に読めないカードを入れると知らせます)
 
-## CardputerZero で使う (v0.4)
+## Wi-Fi でつなぐ (v0.5)
+
+microSD の `hexa` フォルダに `wifi.txt` を置いておくと、CoreMatrix が起動時に Wi-Fi につなぎます。
+
+```
+ssid=自宅のSSID
+pass=パスワード
+name=hexamatrix
+```
+
+- 読み込んだらパスワードを本体に覚えさせ、ファイルは `pass=*****` に書き換えます (カードを抜いても設定は残ります)
+- パスワードを変えたいときは、`pass=` を新しいパスワードに書き直して入れ直します。`ssid=` を空にすると Wi-Fi を使いません (覚えた設定も消えます)
+- `name` は省略すると `hexamatrix`。英数字と `-` だけ。CPZ からは `hexamatrix.local` で見つけます
+- つながると「W」が一瞬出ます。TCP 7800 番で USB と同じパケットを受けます
+- CPZ のハブは USB が無ければ Wi-Fi の CoreMatrix を探します。両方あるときは USB を使います
+- wifi.txt は起動したときだけ読みます。CPZ と CoreMatrix は同じ Wi-Fi (同じルーター) につないでください
+- 別の名前にしたときは CPZ 側で `sudo systemctl edit hexa-matrix` → `Environment=HMATRIX_NET=名前.local` (IPアドレスでも可)
+
+## CardputerZero で使う
 
 CPZ に CoreMatrix をUSBでつなぐと、CPZ が「頭脳」になります。
 
@@ -52,7 +72,7 @@ CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブ
 
 1. CPZ で `git clone https://github.com/tsuchicco0113-png/HEXA-MATRIX ~/hexa-matrix && cd ~/hexa-matrix && sh cpz/install.sh`
 2. 案内どおり `sudo reboot`
-3. CPZ 左の USB-SW を **Host 側 (右/下)** にして、CoreMatrix を USB-A か USB-C1 につなぐ
+3. CPZ 左の USB-SW を **Host 側 (右/下)** にして、CoreMatrix を USB-A か USB-C1 につなぐ (Wi-Fi で使うなら上の wifi.txt)
 4. スマホ/PCのブラウザで `http://<CPZのIP>:8090/` を開く → STUDIO が開き、自動で CPZ 経由に接続します
    (WebSerial が要らないので、スマホや Safari でも送れます)
 
@@ -106,7 +126,8 @@ CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブ
 | 0x14 DELETE | n | ファイル名 |
 | 0x15 PLAY | 1 | 番組の番号 (0から)。0xFF で一時停止 |
 
-本体からの返事は1行ずつのJSONです。v0.4 から PING と LIST の返事に `"sd"` (`ok` / `unreadable` = カードが読めない / `none`) が入ります。
+本体からの返事は1行ずつのJSONです。v0.4 から PING と LIST の返事に `"sd"` (`ok` / `unreadable` = カードが読めない / `none`) が、v0.5 から PING に `"wifi"` (`ok` / `connecting` / `off`)・`"ip"`・`"name"` が入ります。
+Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 
 ## 番組を作る
 

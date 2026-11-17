@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HEXA MATRIX hub — CardputerZero に常駐して CoreMatrix をまとめて受け持つ (v0.4)
+"""HEXA MATRIX hub — CardputerZero に常駐して CoreMatrix をまとめて受け持つ (v0.5)
 
   CoreMatrix ──USB── CPZ (このプログラム) ──Wi-Fi── スマホ / PC のブラウザ
                          └── 本体アプリ (hmatrix_app.py) も localhost で使う
@@ -11,7 +11,9 @@
 USB シリアルを開くのはこのプログラムだけ。STUDIO も本体アプリもここを通る。
 標準ライブラリだけで動く (シリアルは termios で直接開く)。
 
-usage: hmatrixd.py [--port 8090] [--dev /dev/ttyACM0] [--lib DIR]
+usage: hmatrixd.py [--port 8090] [--dev /dev/ttyACM0] [--net hexamatrix.local] [--lib DIR]
+
+USB が無ければ Wi-Fi の CoreMatrix (ファーム v0.5〜、microSD の hexa/wifi.txt でつなぐ) を探す。
 """
 import argparse
 import base64
@@ -36,7 +38,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
+NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
 STUDIO_CANDIDATES = [os.path.join(HERE, "..", "hexa-matrix-studio.html"),
@@ -96,12 +99,22 @@ def find_port():
 
 
 class Link:
-    """CoreMatrix との USB。抜き差しに追従し、返事 (1行JSON) を配る"""
+    """CoreMatrix との USB / Wi-Fi。抜き差しに追従し、返事 (1行JSON) を配る
 
-    def __init__(self, dev=None):
+    USB が見つかれば USB、無ければ Wi-Fi (hexamatrix.local:7800 など) へ TCP でつなぐ。
+    Wi-Fi でつないでいる間に USB が差されたら USB に切り替える。パケットはどちらも同じ。
+    """
+
+    def __init__(self, dev=None, nets=None):
         self.fixed = dev
+        self.nets = [h.strip() for h in (nets or "").split(",") if h.strip() and h.strip() != "off"]
         self.fd = None
+        self.sock = None
+        self.kind = None             # "usb" / "wifi"
         self.path = None
+        self.last_rx = 0.0
+        self.last_ping = 0.0
+        self.last_usb_check = 0.0
         self.wlock = threading.Lock()
         self.waiters = []
         self.wait_lock = threading.Lock()
@@ -118,7 +131,9 @@ class Link:
     def _open(self):
         p = self.fixed or find_port()
         if not p:
-            return False
+            return self._open_net()
+        if p.startswith("tcp://"):
+            return self._open_net([p[6:]])
         try:
             fd = os.open(p, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
             tty.setraw(fd)
@@ -130,19 +145,43 @@ class Link:
         except OSError as e:
             log("open failed", p, e)
             return False
-        self.fd, self.path = fd, p
+        self.fd, self.path, self.kind = fd, p, "usb"
         log("connected", p)
+        self.last_rx = time.monotonic()
         threading.Timer(0.3, lambda: self.send(packet(T_PING))).start()
         return True
+
+    def _open_net(self, hosts=None):
+        for h in (hosts or self.nets):
+            host, _, port = h.partition(":")
+            try:
+                sk = socket.create_connection((host, int(port or NET_PORT)), timeout=2.5)
+            except (OSError, ValueError):
+                continue
+            sk.setblocking(False)
+            sk.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sk.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self.sock, self.fd, self.kind = sk, sk.fileno(), "wifi"
+            self.path = f"wifi {host}:{port or NET_PORT}"
+            log("connected", self.path)
+            self.last_rx = time.monotonic()
+            self.send(packet(T_PING))
+            return True
+        return False
 
     def _close(self):
         if self.fd is not None:
             try:
-                os.close(self.fd)
+                if self.sock:
+                    self.sock.close()
+                else:
+                    os.close(self.fd)
             except OSError:
                 pass
             log("disconnected", self.path)
         self.fd = None
+        self.sock = None
+        self.kind = None
         self.status = {}
         self.devlist = None
         with self.wait_lock:
@@ -156,6 +195,8 @@ class Link:
                 if not self._open():
                     time.sleep(1.5)
                     continue
+            if self.kind == "wifi" and self._wifi_check():
+                continue
             try:
                 r, _, _ = select.select([self.fd], [], [], 0.5)
                 if not r:
@@ -167,6 +208,7 @@ class Link:
                 self._close()
                 time.sleep(1)
                 continue
+            self.last_rx = time.monotonic()
             self.rx += data
             while b"\n" in self.rx:
                 line, _, rest = self.rx.partition(b"\n")
@@ -174,6 +216,23 @@ class Link:
                 self._line(line.decode("utf-8", "replace").strip())
             if len(self.rx) > 8192:
                 self.rx.clear()
+
+    def _wifi_check(self):
+        """Wi-Fi の時: USB が差されたら切り替え、返事が途絶えたらつなぎ直す。切ったら True"""
+        now = time.monotonic()
+        if not self.fixed and now - self.last_usb_check > 3:
+            self.last_usb_check = now
+            if find_port():
+                log("USB が見つかったので USB に切り替えます")
+                self._close(); return True
+        quiet = now - self.last_rx
+        if quiet > 20:
+            log("Wi-Fi の返事が途絶えました")
+            self._close(); time.sleep(1); return True
+        if quiet > 8 and now - self.last_ping > 5:
+            self.last_ping = now
+            self.send(packet(T_PING))
+        return False
 
     def _line(self, ln):
         if not ln:
@@ -491,7 +550,7 @@ class Hub:
     def status(self):
         p = self.player
         return {"ok": True, "hub": "cpz", "ver": VERSION, "connected": self.link.connected,
-                "port": self.link.path, "dev": self.link.status, "player": p.state(),
+                "port": self.link.path, "link": self.link.kind, "dev": self.link.status, "player": p.state(),
                 "frame": p.frame.hex(), "bri": p.bri, "busy": self.busy,
                 "web": time.time() - self.web_last < 5, "ip": local_ip()}
 
@@ -720,7 +779,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
         ws = WS(self.rfile, self.wfile)
-        hello = {"ok": True, "hub": "cpz", "ver": VERSION, "connected": HUB.link.connected, "port": HUB.link.path}
+        hello = {"ok": True, "hub": "cpz", "ver": VERSION, "connected": HUB.link.connected, "port": HUB.link.path,
+                 "link": HUB.link.kind}
         ws.send(json.dumps(hello, ensure_ascii=False))
         if HUB.link.status:
             ws.send(json.dumps(HUB.link.status))
@@ -759,11 +819,13 @@ def main():
     ap = argparse.ArgumentParser(description="HEXA MATRIX hub for CardputerZero")
     ap.add_argument("--port", type=int, default=int(os.environ.get("HMATRIX_PORT", 8090)))
     ap.add_argument("--bind", default="0.0.0.0")
-    ap.add_argument("--dev", default=None, help="USBシリアル (既定: 自動で探す)")
+    ap.add_argument("--dev", default=None, help="USBシリアル (既定: 自動で探す)。tcp://host:port も可")
+    ap.add_argument("--net", default=os.environ.get("HMATRIX_NET", "hexamatrix.local"),
+                    help="USBが無い時につなぐ Wi-Fi の CoreMatrix (カンマ区切り、host[:port]。off で使わない)")
     ap.add_argument("--lib", default=os.environ.get("HMATRIX_LIB", DEF_LIB))
     a = ap.parse_args()
     H.load_fonts()
-    HUB = Hub(Link(a.dev), a.lib)
+    HUB = Hub(Link(a.dev, a.net), a.lib)
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     srv.daemon_threads = True
     log(f"HEXA MATRIX hub {VERSION}  http://{local_ip()}:{a.port}/  library: {a.lib}")

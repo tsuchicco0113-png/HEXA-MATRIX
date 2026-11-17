@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -204,7 +204,7 @@ class App:
         elif not st.get("connected"):
             s, col = "CoreMatrix なし", NGC
         else:
-            s, col = "● " + ("v" + st.get("dev", {}).get("fw", "?")), OKC
+            s, col = "● " + ("Wi-Fi " if st.get("link") == "wifi" else "USB ") + "v" + st.get("dev", {}).get("fw", "?"), OKC
         d.text((LCD_W - 4 - self.font_t.getlength(s), 3), s, fill=col, font=self.font_t)
         d.rectangle((0, LCD_H - BOT_H, LCD_W, LCD_H), fill=(24, 18, 8))
         d.text((4, LCD_H - BOT_H + 1), hint, fill=(210, 210, 210), font=self.font_s)
@@ -345,9 +345,10 @@ class App:
         img, d = self.frame("本体の番組", "↑↓ / ENTER 流す / SPACE 止める / D 消す / R")
         dv = self.dev
         if not self.hub.st.get("connected"):
-            d.text((10, 44), "CoreMatrix がつながっていません", fill=NGC, font=self.font_s)
-            d.text((10, 66), "USB-SW を Host 側(右)にして", fill=SUB, font=self.font_s)
-            d.text((10, 84), "USB-A か USB-C1 につないでください", fill=SUB, font=self.font_s)
+            d.text((10, 40), "CoreMatrix がつながっていません", fill=NGC, font=self.font_s)
+            d.text((10, 62), "USB: USB-SW を Host 側(右)にして", fill=SUB, font=self.font_s)
+            d.text((10, 80), "      USB-A か USB-C1 へ", fill=SUB, font=self.font_s)
+            d.text((10, 102), "Wi-Fi: SD の hexa/wifi.txt (v0.5〜)", fill=SUB, font=self.font_s)
         elif dv is None:
             d.text((10, 50), "読み込み中…", fill=SUB, font=self.font)
         else:

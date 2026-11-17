@@ -1,11 +1,17 @@
 """模擬 CoreMatrix (pty)。ハブを実機なしで試す: python3 tests/fakecm.py & python3 cpz/hmatrixd.py --dev /tmp/fakecm
 ファーム v0.4 の返事をまねる。/tmp/fakecm にリンクを作る"""
-import os, pty, tty, json, struct, zlib, time, sys, select, re
-m, s = pty.openpty()
-tty.setraw(m); tty.setraw(s)
-name = os.ttyname(s)
-if os.path.lexists("/tmp/fakecm"): os.remove("/tmp/fakecm")
-os.symlink(name, "/tmp/fakecm")
+import os, pty, tty, json, struct, zlib, time, sys, select, re, socket
+TCP = int(sys.argv[sys.argv.index("--tcp") + 1]) if "--tcp" in sys.argv else 0   # Wi-Fi の代わり: --tcp 7800
+if TCP:
+    srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", TCP)); srv.listen(1)
+    m = None; name = f"tcp 127.0.0.1:{TCP}"
+else:
+    m, s = pty.openpty()
+    tty.setraw(m); tty.setraw(s)
+    name = os.ttyname(s)
+    if os.path.lexists("/tmp/fakecm"): os.remove("/tmp/fakecm")
+    os.symlink(name, "/tmp/fakecm")
 FILES = {}; cur = 0; paused = False; live = False; liveBri = 128; rot = 1; frames = 0
 up = None
 stats = {"frames": 0, "bright": [], "last": None}
@@ -15,9 +21,11 @@ def crc8(d):
         c ^= b
         for _ in range(8): c = ((c << 1) ^ 7) & 255 if c & 128 else (c << 1) & 255
     return c
-def out(j): os.write(m, (json.dumps(j) + "\n").encode())
+def out(j):
+    try: os.write(m, (json.dumps(j) + "\n").encode())
+    except (OSError, TypeError): pass
 def status(): out({"ok": True, "dev": "corematrix", "fw": "0.4.0", "bri": liveBri, "rot": rot, "frames": stats["frames"],
-                   "store": "sd", "sd": "ok", "n": len(FILES), "cur": cur, "paused": paused, "live": live, "master": 4})
+                   "store": "sd", "sd": "ok", "n": len(FILES), "cur": cur, "paused": paused, "live": live, "master": 4, "wifi": "ok" if TCP else "off", "ip": "", "name": "hexamatrix"})
 def names(): return sorted(FILES)
 def lst(): out({"ok": True, "list": True, "store": "sd", "sd": "ok", "free": 1000000, "cur": cur, "paused": paused,
                "files": [{"n": n, "s": len(FILES[n])} for n in names()]})
@@ -61,10 +69,20 @@ def handle(t, p):
 buf = bytearray()
 print("fake at", name, flush=True)
 open("/tmp/fakecm.frames", "w").close()
+conn = None
 while True:
-    r, _, _ = select.select([m], [], [], 0.5)
+    rl = ([srv] if TCP else []) + ([m] if m is not None else [])
+    r, _, _ = select.select(rl, [], [], 0.5)
     if not r: continue
-    buf += os.read(m, 4096)
+    if TCP and srv in r:
+        if conn: conn.close()
+        conn, _ = srv.accept(); m = conn.fileno(); buf.clear(); continue
+    try: data = os.read(m, 4096)
+    except OSError: data = b""
+    if not data:
+        if TCP: conn.close(); conn = None; m = None; continue
+        continue
+    buf += data
     while True:
         i = buf.find(b"\xA5\x5A")
         if i < 0: buf.clear(); break
