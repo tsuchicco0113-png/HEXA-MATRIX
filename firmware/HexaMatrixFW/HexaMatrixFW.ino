@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.2 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.3 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -42,7 +42,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.2";
+static const char* FW_VER = "0.9.3";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -595,13 +595,19 @@ void loop() {
     lastByteMs = millis();
   }
   uint32_t now = millis();
-  if (!usbParser.idle() && now - lastByteMs > 300) usbParser.reset();   // 途切れたパケットは捨てる
+  if (!usbParser.idle() && (int32_t)(now - lastByteMs) > 300) usbParser.reset();   // 途切れたパケットは捨てる
   netTick(now);
-  if (up.active && now - upLastMs > 5000) {      // 途中で止まった受け取りは黙って捨てる (送り側は自分で時間切れにしている)
+  // v0.9.3: Wi-Fi で受けた分は netTick の中で millis() を記録するので、now を取り直す。
+  //   以前は古い now から引き算して負 (=符号なしで巨大) になり、Wi-Fi で受けた直後に
+  //   ・転送を「時間切れ」として捨てる (→ 中身がすべて捨てられ、一時再生が送れない)
+  //   ・1コマ送りを「止んだ」として消灯する (→ Wi-Fi の時だけ点滅)
+  //   していた。比較も符号付きにして、同じ間違いが起きないようにする
+  now = millis();
+  if (up.active && (int32_t)(now - upLastMs) > 5000) {      // 途中で止まった受け取りは黙って捨てる (送り側は自分で時間切れにしている)
     bool ram = upRam; abortUpload();
     if (!ram && !paused) openProgram(cur, false);
   }
-  if (live && now - lastLiveMs > LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
+  if (live && (int32_t)(now - lastLiveMs) > (int32_t)LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
     live = false;
     if (clipMode) nextAt = now; else goIdle();                     // 番組は自動で再開しない
   }
