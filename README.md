@@ -1,11 +1,11 @@
-# HEXA MATRIX (v0.8)
+# HEXA MATRIX (v0.9)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
 | ファイル | 役割 |
 |---|---|
 | `hexa-matrix-studio.html` | STUDIO。「マークを作る」と「番組を作る」の2画面。USBで実機に映す |
-| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.8。microSD の番組を自分で流す。USBで届いたコマも表示する |
+| `firmware/HexaMatrixFW/` | CoreMatrix 用ファーム v0.9。microSD の番組を自分で流す。USBで届いたコマも表示する |
 | `cpz/` | CardputerZero 用。常駐ハブ (`hmatrixd.py`)、本体アプリ (`hmatrix_app.py`)、描画エンジンの Python 版 (`hxengine.py`) |
 | `src/` `build.py` | STUDIO の元ファイル。`python3 build.py` で1枚のHTMLに組み立てる |
 | `tools/mkfont.py` | ドットフォント (BDF) をSTUDIO用の表に変換する |
@@ -60,6 +60,8 @@ name=hexamatrix
 
 - 読み込んだらパスワードを本体に覚えさせ、ファイルは `pass=*****` に書き換えます (カードを抜いても設定は残ります)
 - パスワードを変えたいときは、`pass=` を新しいパスワードに書き直して入れ直します。`ssid=` を空にすると Wi-Fi を使いません (覚えた設定も消えます)
+- 追加の設定 (v0.9、省略可): `sleep=off` で Wi-Fi の省電力を切る (既定は on)、`tx=11` で送信の強さ (dBm, 2〜20、既定 15)。
+  Wi-Fi 中だけ表示がちらつくときは、省電力 on のまま `tx=` を下げると良くなることがあります
 - `name` は省略すると `hexamatrix`。英数字と `-` だけ。CPZ からは `hexamatrix.local` で見つけます
 - つながると「W」が一瞬出ます。TCP 7800 番で USB と同じパケットを受けます
 - CPZ のハブは USB が無ければ Wi-Fi の CoreMatrix を探します。両方あるときは USB を使います
@@ -76,7 +78,7 @@ CPZ の「ことば」「ライブラリ → CPZから流す」は、1コマず�
 - CPZ から流し始めると、CPZ から開いている STUDIO の「描いたらすぐ映す」「実機にも流す」は自動で外れます (交互に出ないように)。CPZ から開いた STUDIO は、この2つが最初から外れています
 - 送り方は同じファイル転送 (0x10〜0x12) で、名前を `@live` (くりかえし) / `@once` (1回) にするだけ。PLAY `0xFE` で番組へ戻る
 - Wi-Fi では返事を待たずに8個先まで送るので、80KB 程度の番組でもすぐ始まります
-- ファーム v0.6 から Wi-Fi の省電力を切っています (入れたままだと受信が100ms単位でまとめて届く)
+- Wi-Fi の省電力は v0.6〜0.8 では切っていましたが、Wi-Fi 中に表示がちらつく症状が出たため v0.9 で既定を「入れる」に戻しました (一時再生なので受信の遅れは見た目に出ません)
 - ファームが v0.5 以前なら、これまでどおり1コマずつ送ります
 - STUDIO の「実機にも流す」(ブラウザからのプレビュー) は今までどおり1コマずつです
 

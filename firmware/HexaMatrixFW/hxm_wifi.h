@@ -6,6 +6,8 @@
 //
 //   # で始まる行は無視。キーの前後の空白・CRLF・先頭の BOM は気にしない
 //   ssid= を空にしておくと Wi-Fi を使わない (覚えた設定も消す)
+//   sleep=off   Wi-Fi の省電力を切る (既定は on。切ると電流が増え、表示がちらつくことがある)
+//   tx=11       送信の強さ (dBm, 2〜20)。既定は 15。下げると電流の山が小さくなる
 #pragma once
 #include <stddef.h>
 #include <string.h>
@@ -17,6 +19,8 @@ struct HxmWifiCfg {
   bool hasSsid;       // ssid= の行がある
   bool hasPass;       // pass= の行がある
   bool passMasked;    // pass が ***** (書き換え済み)
+  int  sleep;         // -1=書いてない / 0=off / 1=on
+  int  tx;            // -1=書いてない / dBm
 };
 
 static inline bool hxm_ws(char c) { return c == ' ' || c == '\t' || c == '\r'; }
@@ -55,6 +59,7 @@ static inline void hxm_wifi_lines(const char* t, size_t n, F cb) {
 
 static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
   memset(c, 0, sizeof *c);
+  c->sleep = -1; c->tx = -1;
   hxm_wifi_lines(t, n, [&](const char* k, size_t kn, const char* v, size_t vn, size_t, size_t, size_t) {
     if (hxm_key_is(k, kn, "ssid")) {
       c->hasSsid = true; size_t m = vn < 32 ? vn : 32; memcpy(c->ssid, v, m); c->ssid[m] = 0;
@@ -62,6 +67,12 @@ static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
       c->hasPass = true; c->passMasked = hxm_all_stars(v, vn);
       size_t m = vn < 64 ? vn : 64; memcpy(c->pass, v, m); c->pass[m] = 0;
       if (c->passMasked) c->pass[0] = 0;
+    } else if (hxm_key_is(k, kn, "sleep")) {
+      c->sleep = (vn >= 2 && (v[0] == 'o' || v[0] == 'O') && (v[1] == 'f' || v[1] == 'F')) || (vn == 1 && v[0] == '0') ? 0 : 1;
+    } else if (hxm_key_is(k, kn, "tx")) {
+      int x = 0; size_t i = 0;
+      for (; i < vn && v[i] >= '0' && v[i] <= '9'; i++) x = x * 10 + (v[i] - '0');
+      if (i > 0) c->tx = x < 2 ? 2 : x > 20 ? 20 : x;
     } else if (hxm_key_is(k, kn, "name")) {
       size_t o = 0;                                   // ホスト名に使える字だけ (英数字と -)
       for (size_t i = 0; i < vn && o < 31; i++) {

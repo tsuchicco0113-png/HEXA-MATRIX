@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.8.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -42,7 +42,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.8.0";
+static const char* FW_VER = "0.9.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -434,6 +434,8 @@ static void wifiSetup() {
         ssid = c.ssid;
       }
       if (c.name[0]) nm = c.name;
+      if (c.sleep >= 0) prefs.putChar("wsleep", (int8_t)c.sleep);
+      if (c.tx >= 0) prefs.putChar("wtx", (int8_t)c.tx);
       prefs.putString("wssid", ssid); prefs.putString("wpass", pass); prefs.putString("wname", nm);
       size_t m = hxm_wifi_mask(buf, n, outb, sizeof outb);
       if (m) {
@@ -447,8 +449,11 @@ static void wifiSetup() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(wName);
   WiFi.setAutoReconnect(true);
-  WiFi.setSleep(false);                  // 省電力を切る (入れたままだと受信が100ms単位で遅れ、まとめて届く)
+  // v0.9: 省電力は既定で入れる。CPZ はコマ列をまとめて送って本体が自分で流すので、受信の遅れは見た目に出ない。
+  //       切ると無線が常に動いて電流が増え、Wi-Fi 中だけ表示がちらつく (実機で確認された症状) 原因になりうる
+  WiFi.setSleep(prefs.getChar("wsleep", 1) != 0);
   WiFi.begin(ssid.c_str(), pass.c_str());
+  WiFi.setTxPower((wifi_power_t)(prefs.getChar("wtx", 15) * 4));   // 0.25dBm 単位
   wifiOn = true;
 }
 static void handlePacket();
@@ -593,5 +598,12 @@ void loop() {
     }
   }
   if (clipMode) clipTick(); else playTick();
+  // LED ドライバ (TM1680) の状態を時々送り直す。電源の揺れなどで消えても 0.2 秒で戻るように
+  static uint32_t lastKeep = 0;
+  if (now - lastKeep > 200 && !needRestore && (int32_t)(now - holdUntil) >= 0) {
+    lastKeep = now;
+    if (outBri > 0) { M5.Display.wakeup(); M5.Display.setBrightness((uint8_t)outBri); }
+    drawFrame();
+  }
   delay(1);
 }
