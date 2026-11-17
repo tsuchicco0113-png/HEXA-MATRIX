@@ -63,7 +63,7 @@ CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブ
 
 | 画面 | できること |
 |---|---|
-| 1 ことば | 打った文字をその場で流す。動き・入り方・はやさ・明るさ・字の大きさを選べる (英数字と記号) |
+| 1 ことば | 打った文字をその場で流す。動き・入り方・はやさ・明るさ・字 (16/8ドット、太字)・長さ (ずっと/1回だけ/10秒〜10分) を選べる (英数字と記号) |
 | 2 ライブラリ | CPZに置いた番組を CPZ から流す (くりかえし / 1回)、本体(SD)へ送る、消す |
 | 3 本体 | CoreMatrix の中の番組を選んで流す、止める、消す |
 | 4 設定 | CoreMatrix の明るさ、向き、スマホから開くQR |
@@ -81,7 +81,7 @@ CoreMatrix ──USB── CardputerZero ──Wi-Fi── スマホ / PC のブ
 | `GET/POST /api/library` | 一覧 / 置く (`{"name","program"}` か `?name=` + .hxm の中身) |
 | `GET/DELETE /api/library/<名前>` | .hxm を取り出す / 消す |
 | `POST /api/play` `{"name","loop"}` ・ `POST /api/stop` | CPZ から流す / 止める |
-| `POST /api/say` `{"text","show","eff","speed","bri","size"}` | ことばを流す |
+| `POST /api/say` `{"text","show","eff","speed","bri","size","bold","loop","dur"}` | ことばを流す (`dur` 秒で止める。0=ずっと) |
 | `POST /api/push` `{"name","as"}` | ライブラリの番組を本体へ保存 |
 | `GET /api/device/list` ・ `POST /api/device/play` `{"idx"}`/`{"pause":true}` ・ `POST /api/device/delete` `{"name"}` | 本体の番組 |
 | `POST /api/device/bright` `{"value"}` ・ `POST /api/device/rotate` | 明るさ (ライブ) / 向き |

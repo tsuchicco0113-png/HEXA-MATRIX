@@ -53,6 +53,8 @@ SHOWS = [("scrollL", "横流し"), ("static", "止めて"), ("wave", "波"), ("b
 EFFS = [("none", "なし"), ("slideL", "横から"), ("slideU", "下から"), ("type", "1字ずつ"),
         ("dissolve", "粒"), ("drop", "落ちる"), ("fade", "ふわっ"), ("zoom", "ズーム")]
 MASTER = [40, 100, 170, 255]
+FONTS = [(16, False, "16ドット"), (16, True, "16ドット 太字"), (8, False, "8ドット (2行)"), (8, True, "8ドット 太字")]
+DURS = [(0, "ずっと"), (-1, "1回だけ"), (10, "10秒"), (30, "30秒"), (60, "1分"), (180, "3分"), (600, "10分")]
 
 
 # ------------------------------------------------------------------ hub との話
@@ -152,7 +154,9 @@ class App:
         self.sel = 0
         c = load_cfg()
         self.say = {"text": c.get("text", "HELLO"), "show": c.get("show", 0), "speed": c.get("speed", 6),
-                    "bri": c.get("bri", 8), "eff": c.get("eff", 0), "size": c.get("size", 16)}
+                    "bri": c.get("bri", 8), "eff": c.get("eff", 0),
+                    "font": c.get("font", 0 if c.get("size", 16) == 16 else 2) % len(FONTS),
+                    "dur": c.get("dur", 0) % len(DURS)}
         self.say_row = 0
         self.lib = []; self.lib_i = 0; self.lib_menu = None
         self.dev = None; self.dev_i = 0; self.dev_confirm = False
@@ -226,7 +230,8 @@ class App:
         st = self.hub.st
         p = st.get("player") or {}
         if p.get("playing"):
-            return "▶ " + p.get("name", ""), ACC
+            left = p.get("left")
+            return ("▶ " + (f"あと{left}秒 " if left is not None else "") + p.get("name", "")), ACC
         if st.get("web"):
             return "ブラウザから送信中", OKC
         dv = st.get("dev") or {}
@@ -280,7 +285,8 @@ class App:
                 ("入り", EFFS[s["eff"]][1]),
                 ("はやさ", f"{s['speed']}"),
                 ("明るさ", f"{s['bri']}/16"),
-                ("字", "16ドット" if s["size"] == 16 else "8ドット (2行)")]
+                ("字", FONTS[s["font"]][2]),
+                ("長さ", DURS[s["dur"]][1])]
         y = 21
         for i, (k, v) in enumerate(rows):
             on = i == self.say_row
@@ -313,7 +319,7 @@ class App:
             d.text((10, 44), "まだ番組がありません", fill=FG, font=self.font)
             d.text((10, 72), "スマホ/PCで STUDIO を開いて", fill=SUB, font=self.font_s)
             d.text((10, 90), "「CPZに置く」を押してください", fill=SUB, font=self.font_s)
-            self.draw_qr_small(img, 240, 40)
+            self.draw_qr_small(img, 226, 24)
         else:
             self.list_draw(d, [(it["title"], f"{it.get('sec') or '?'}秒") for it in self.lib], self.lib_i, 222)
             self.draw_led(d, 240, 30, pitch=4.6, r=1.8)
@@ -383,28 +389,37 @@ class App:
                 f"USB {st.get('port') or '-'}"]
         for i, t in enumerate(info):
             d.text((6, 132 + i * 11), self.ellipsize(t, 190, self.font_t), fill=SUB, font=self.font_t)
-        self.draw_qr_small(img, 208, 26)
+        self.draw_qr_small(img, 210, 24)
         return img
 
     def url(self):
         ip = self.hub.st.get("ip") or "?"
         return f"http://{ip}:8090/"
 
-    def draw_qr_small(self, img, x0, y0):
+    def draw_qr_small(self, img, x0, y0, maxw=84):
+        """スマホ用QR。x0 から右端までに収める (QR・文字とも画面からはみ出さない)"""
         d = ImageDraw.Draw(img)
+        right = LCD_W - 3
+        maxw = min(maxw, right - x0)
+        bottom = LCD_H - BOT_H - 2
+        url = self.url()
+        w = h = 0
         try:
             import qrcode
-            qr = qrcode.QRCode(border=2, box_size=1, error_correction=qrcode.constants.ERROR_CORRECT_L)
-            qr.add_data(self.url()); qr.make(fit=True)
+            qr = qrcode.QRCode(border=1, box_size=1, error_correction=qrcode.constants.ERROR_CORRECT_L)
+            qr.add_data(url); qr.make(fit=True)
             q = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-            k = max(1, 96 // q.size[0])
+            k = max(1, min(maxw, bottom - y0 - 26) // q.size[0])
             q = q.resize((q.size[0] * k, q.size[1] * k), Image.NEAREST)
-            img.paste(q, (x0, y0))
-            h = q.size[1]
+            w, h = q.size
+            img.paste(q, (right - w, y0))
         except Exception:                        # noqa: BLE001  qrcode が無い時は文字だけ
-            h = 0
-        d.text((x0, y0 + h + 3), "スマホでSTUDIO", fill=SUB, font=self.font_t)
-        d.text((x0 - 6, y0 + h + 15), self.url().replace("http://", ""), fill=ACC, font=self.font_t)
+            pass
+        cx = right - w / 2 if w else (x0 + right) / 2
+        for i, (t, col) in enumerate((("スマホでSTUDIO", SUB), (url.replace("http://", "").rstrip("/"), ACC))):
+            tw = self.font_t.getlength(t)
+            tx = max(x0 - 30, min(cx - tw / 2, right - tw))
+            d.text((tx, y0 + h + 2 + i * 12), t, fill=col, font=self.font_t)
 
     def list_draw(self, d, items, cur, width, top=24, row=18):
         n = max(1, (LCD_H - BOT_H - top - 2) // row)
@@ -488,7 +503,7 @@ class App:
         if val == "BS":
             s["text"] = s["text"][:-1]; return
         if val in ("UP", "DOWN", "TAB"):
-            self.say_row = (self.say_row + (-1 if val == "UP" else 1)) % 6; return
+            self.say_row = (self.say_row + (-1 if val == "UP" else 1)) % 7; return
         if val in ("LEFT", "RIGHT"):
             dlt = -1 if val == "LEFT" else 1
             r = self.say_row
@@ -496,7 +511,8 @@ class App:
             elif r == 2: s["eff"] = (s["eff"] + dlt) % len(EFFS)
             elif r == 3: s["speed"] = max(1, min(10, s["speed"] + dlt))
             elif r == 4: s["bri"] = max(1, min(16, s["bri"] + dlt))
-            elif r == 5: s["size"] = 8 if s["size"] == 16 else 16
+            elif r == 5: s["font"] = (s["font"] + dlt) % len(FONTS)
+            elif r == 6: s["dur"] = (s["dur"] + dlt) % len(DURS)
             return
         if val == "DEL":
             s["text"] = ""; return
@@ -508,15 +524,19 @@ class App:
         if not s["text"].strip():
             self.toast("文字を打ってください", ok=False); return
         self.save()
+        size, bold, _ = FONTS[s["font"]]
+        dur = DURS[s["dur"]][0]
         body = {"text": s["text"], "show": SHOWS[s["show"]][0], "eff": EFFS[s["eff"]][0],
-                "speed": s["speed"], "bri": s["bri"], "size": s["size"], "loop": True}
+                "speed": s["speed"], "bri": s["bri"], "size": size, "bold": bold,
+                "loop": dur != -1, "dur": max(0, dur)}
+        how = {0: "くりかえし", -1: "1回だけ"}.get(dur, DURS[s["dur"]][1] + "だけ")
         self.ask("ことば", lambda: self.hub.call("POST", "/api/say", body),
-                 lambda r: self.toast(f"流しています ({r.get('sec')}秒でひとまわり)"))
+                 lambda r: self.toast(f"流しています ({how})"))
 
     def save(self):
         s = self.say
         save_cfg({"text": s["text"], "show": s["show"], "speed": s["speed"], "bri": s["bri"],
-                  "eff": s["eff"], "size": s["size"]})
+                  "eff": s["eff"], "font": s["font"], "dur": s["dur"]})
 
     def refresh_lib(self):
         def done(r):

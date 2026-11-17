@@ -260,12 +260,14 @@ class Player:
         self.frame = bytes(32)       # いま出している絵 (本体アプリのプレビュー用)
         self.bri = None
 
-    def play(self, name, frames, loop=True):
+    def play(self, name, frames, loop=True, dur=None):
+        """dur: 流す秒数 (くりかえしの途中でも、時間が来たら止める)。None ならずっと"""
         if not frames:
             raise ValueError("コマがありません")
         with self.lock:
             self.gen += 1
-            self.job = {"name": name, "frames": frames, "loop": loop, "total": sum(f[0] for f in frames)}
+            self.job = {"name": name, "frames": frames, "loop": loop, "total": sum(f[0] for f in frames),
+                        "until": time.monotonic() + dur if dur else None}
             self.pos = 0
             g = self.gen
         threading.Thread(target=self._run, args=(g,), daemon=True).start()
@@ -279,8 +281,11 @@ class Player:
         j = self.job
         if not j:
             return {"playing": False}
-        return {"playing": True, "name": j["name"], "loop": j["loop"], "frames": len(j["frames"]),
-                "sec": round(j["total"] / 1000, 1), "pos": self.pos}
+        out = {"playing": True, "name": j["name"], "loop": j["loop"], "frames": len(j["frames"]),
+               "sec": round(j["total"] / 1000, 1), "pos": self.pos}
+        if j.get("until"):
+            out["left"] = max(0, int(j["until"] - time.monotonic() + 0.99))
+        return out
 
     def _run(self, g):
         job = self.job
@@ -290,6 +295,8 @@ class Player:
             for i, (ms, bri, fb) in enumerate(job["frames"]):
                 if self.gen != g:
                     return
+                if job["until"] and time.monotonic() >= job["until"]:
+                    break
                 self.pos = i
                 if bri != last_b:
                     self.link.send(packet(T_BRIGHT, [bri])); last_b = bri
@@ -306,7 +313,7 @@ class Player:
                     time.sleep(min(t - now, 0.05, max(0.001, KEEPALIVE - (now - last_tx))))
                 if time.monotonic() - t > 0.5:          # 大きく遅れたら追いつこうとしない
                     t = time.monotonic()
-            if not job["loop"]:
+            if not job["loop"] or (job["until"] and time.monotonic() >= job["until"]):
                 break
         with self.lock:
             if self.gen == g:
@@ -417,7 +424,11 @@ class Hub:
         frames = H.render_program([sc])
         fr = [(f.ms, f.bri, H.to_bytes(f.b)) for f in frames]
         self.last_say = sc
-        self.player.play("ことば: " + text[:20], fr, opt.get("loop", True))
+        try:
+            dur = float(opt.get("dur") or 0)
+        except (TypeError, ValueError):
+            dur = 0
+        self.player.play("ことば: " + text[:20], fr, opt.get("loop", True) and dur >= 0, dur if dur > 0 else None)
         return {"frames": len(fr), "sec": round(sum(x[0] for x in fr) / 1000, 1)}
 
     # ---- 本体 (CoreMatrix) の番組
