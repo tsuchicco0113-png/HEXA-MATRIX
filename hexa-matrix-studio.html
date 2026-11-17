@@ -32,6 +32,22 @@
   .c{border-radius:50%; background:var(--off); cursor:crosshair}
   .c.on{background:var(--on); box-shadow:0 0 5px rgba(255,255,255,.75)}
   .pvrow{display:flex; align-items:center; gap:12px; margin-top:12px; flex-wrap:wrap}
+  .c.onion{background:#3a3f4b}
+  #grid.playing .c{cursor:pointer}
+  /* コマ (アニメーション) */
+  .anim{margin-top:12px; border-top:1px solid var(--border); padding-top:10px; width:min(400px,calc(100vw - 58px))}
+  #fstrip{display:flex; gap:5px; overflow-x:auto; padding:2px 2px 6px; margin-bottom:6px}
+  .ft{position:relative; flex:0 0 auto; cursor:pointer}
+  .ft canvas{width:40px; height:40px; background:#000; border-radius:5px; border:1px solid var(--border); display:block}
+  .ft.sel canvas{border:2px solid var(--acc)}
+  .ft.play canvas{border:2px solid #f0c040}
+  .ft span{position:absolute; top:1px; left:3px; font-size:9px; color:#fff; text-shadow:0 0 2px #000; pointer-events:none}
+  .ft.add canvas{display:none}
+  .ft.add button{width:40px; height:40px; padding:0; font-size:18px}
+  .twg{display:grid; grid-template-columns:auto 1fr 1fr; gap:6px 8px; align-items:center; font-size:11px}
+  .twg input{width:100%; font-family:inherit; font-size:12px; background:var(--bg); color:var(--text);
+    border:1px solid var(--border); border-radius:6px; padding:6px 6px; min-width:0}
+  .twg .h{color:var(--dim); font-size:10px}
   #pv{background:#000; border:1px solid var(--border); border-radius:8px}
   .lbl{color:var(--dim); font-size:11px; line-height:1.6}
 
@@ -176,6 +192,27 @@
           なぞると描画、点いている所から<br>なぞると消去
         </div>
       </div>
+      <div class="anim">
+        <div class="lbl" id="fInfo" style="margin-bottom:4px">コマ 1 / 1</div>
+        <div id="fstrip"></div>
+        <div class="grp">
+          <button id="fAdd" title="白紙のコマを今のコマの後ろに足します">＋コマ</button>
+          <button id="fDup" title="今のコマを複製して後ろに足します">⧉ 複製</button>
+          <button id="fDel" class="warn" title="今のコマを消します">削除</button>
+          <button id="fLeft" title="今のコマを1つ前へ">◀</button>
+          <button id="fRight" title="今のコマを1つ後ろへ">▶</button>
+          <button id="onion" title="1つ前のコマを薄く出します (なぞる時の目安)">オニオン</button>
+        </div>
+        <div class="grp">
+          <button id="aPlay" class="primary">▶ 再生</button>
+          <input type="range" id="aFps" min="1" max="30" value="8" style="flex:1;min-width:80px">
+          <span class="val" id="aFpsV">8コマ/秒</span>
+        </div>
+        <div class="grp">
+          <button id="aToProg" title="このコマ並びを「番組を作る」の最後にコマアニメのシーンとして足します">番組に入れる</button>
+          <span class="lbl" id="aDur"></span>
+        </div>
+      </div>
     </div>
 
     <div>
@@ -203,6 +240,42 @@
           <button id="speck" title="まわり8マスに仲間がいない点を消します">孤立した点を消す</button>
           <button id="outline" title="塗りつぶしの中を抜いて外周だけ残します">輪郭だけにする</button>
           <button id="clear" class="warn">全消去</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>トゥイーン (自動で中割り)</h2>
+        <div class="hint" style="margin:0 0 8px">今のコマの絵を、動かしたり・大きさを変えたり・点を間引いたりして、コマを自動で作ります。</div>
+        <div class="grp"><span class="g">ひな形</span>
+          <select id="twPreset" style="flex:1">
+            <option value="">選ぶと下の値に入ります…</option>
+            <option value="sway">上下にゆれる (往復)</option>
+            <option value="inL">左から入る</option>
+            <option value="outR">右へ抜ける</option>
+            <option value="inT">上から落ちて弾む</option>
+            <option value="pop">下からポップ</option>
+            <option value="fadeIn">ふわっと出る</option>
+            <option value="fadeOut">ふわっと消える</option>
+            <option value="zoomIn">まん中から広がる</option>
+            <option value="beat">ドキドキ (大きく小さく)</option>
+          </select></div>
+        <div class="twg">
+          <span></span><span class="h">はじめ</span><span class="h">おわり</span>
+          <span class="h">横 (→ +)</span><input type="number" id="twSX" value="0" min="-16" max="16"><input type="number" id="twEX" value="0" min="-16" max="16">
+          <span class="h">縦 (↓ +)</span><input type="number" id="twSY" value="0" min="-16" max="16"><input type="number" id="twEY" value="-3" min="-16" max="16">
+          <span class="h">大きさ %</span><input type="number" id="twSS" value="100" min="0" max="300"><input type="number" id="twES" value="100" min="0" max="300">
+          <span class="h">点の残り %</span><input type="number" id="twSO" value="100" min="0" max="100"><input type="number" id="twEO" value="100" min="0" max="100">
+        </div>
+        <div class="grp" style="margin-top:8px"><span class="g">コマ数</span>
+          <input type="number" id="twN" value="8" min="2" max="32" style="width:60px;font-family:inherit;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px">
+          <select id="twEase">
+            <option value="linear">一定</option><option value="easeIn">だんだん速く</option>
+            <option value="easeOut">だんだん遅く</option><option value="easeInOut" selected>ゆっくり→速く→ゆっくり</option>
+            <option value="bounce">弾む</option></select>
+          <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="twPP"> 往復</label></div>
+        <div class="grp"><span class="g">入れ方</span>
+          <select id="twPlace"><option value="after">今のコマの後ろに足す</option><option value="replace">今のコマと入れ替える</option></select>
+          <button id="twGen" class="primary">コマを作る</button></div>
+        <div class="hint">LEDは点くか消えるかだけなので「点の残り」は点を網目に間引いて表します。大きさ 0% は何もない状態です。</div>
       </div>
 
       <div class="panel">
@@ -289,7 +362,7 @@
         </div>
         <div data-k="mark anim" class="row">
           <select id="fLib"></select>
-          <button id="fFromEd" title="「マークを作る」で描いている絵を使います">マーク画面の絵を使う</button>
+          <button id="fFromEd" title="「マークを作る」の絵を使います。コマアニメで、マーク画面にコマが複数あるときは全部入れ替えます">マーク画面の絵を使う</button>
         </div>
 
         <div class="row" id="rowIn"><span class="g">入り方</span><select id="fIn"></select></div>
@@ -396,6 +469,7 @@
 const N=16, NN=N*N;
 const $=id=>document.getElementById(id);
 let grid=new Uint8Array(NN);
+let frames=[grid], cur=0, onionOn=false;   // コマアニメ。grid は常に frames[cur] (いま描いているコマ)
 
 // ============================================================
 // 変換の本体 (DOMに触れない。CPZ側のエンジンへ移すときもこのまま使える)
@@ -519,24 +593,38 @@ function drawLed(cv,b,bg){
   }
 }
 function render(){
+  frames[cur]=grid;
+  if(typeof animStop==="function") animStop(true);
   let n=0;
-  for(let i=0;i<NN;i++){ cells[i].classList.toggle("on",!!grid[i]); n+=grid[i]; }
+  const prev=(onionOn && cur>0) ? frames[cur-1] : null;
+  for(let i=0;i<NN;i++){
+    cells[i].classList.toggle("on",!!grid[i]); n+=grid[i];
+    cells[i].classList.toggle("onion",!!(prev && !grid[i] && prev[i]));
+  }
   $("litN").textContent=n;
   drawLed($("pv"),grid);
   renderOut();
+  if(typeof stripThumb==="function") stripThumb(cur);
   liveSend(grid);
 }
 
+// 履歴は「コマ全部 + 今のコマ番号」を記録する (コマの追加・削除・トゥイーンも戻せるように)
 let hist=[],hpos=-1;
 function push(){
-  hist=hist.slice(0,hpos+1); hist.push(grid.slice());
+  frames[cur]=grid;
+  hist=hist.slice(0,hpos+1); hist.push({fr:frames.map(f=>f.slice()),cur:cur});
   if(hist.length>80) hist.shift();
   hpos=hist.length-1; syncHist();
 }
+function restore(h){
+  frames=h.fr.map(f=>f.slice()); cur=Math.min(h.cur,frames.length-1); grid=frames[cur];
+  if(typeof animStop==="function") animStop(true);
+  render(); if(typeof stripRender==="function") stripRender();
+}
 function syncHist(){ $("undo").disabled=hpos<=0; $("redo").disabled=hpos>=hist.length-1; }
 function setGrid(b,rec){ grid=Uint8Array.from(b); render(); if(rec!==false) push(); }
-$("undo").onclick=()=>{ if(hpos>0){ grid=hist[--hpos].slice(); render(); syncHist(); } };
-$("redo").onclick=()=>{ if(hpos<hist.length-1){ grid=hist[++hpos].slice(); render(); syncHist(); } };
+$("undo").onclick=()=>{ if(hpos>0){ restore(hist[--hpos]); syncHist(); } };
+$("redo").onclick=()=>{ if(hpos<hist.length-1){ restore(hist[++hpos]); syncHist(); } };
 
 let painting=false, paintVal=1, lastI=-1;
 function cellAt(e){ const el=document.elementFromPoint(e.clientX,e.clientY); return (el&&el.parentElement===gridEl)?+el.dataset.i:-1; }
@@ -858,24 +946,35 @@ function store(){ try{ localStorage.setItem("__p","1"); localStorage.removeItem(
 function libLoad(){ const s=store(); if(!s) return; try{ const j=JSON.parse(s.getItem(LIB_KEY)||"[]"); if(Array.isArray(j)) lib=j.filter(okItem); }catch(e){} }
 function libPersist(){ const s=store(); if(!s) return false; try{ s.setItem(LIB_KEY,JSON.stringify(lib)); return true; }catch(e){ return false; } }
 function okItem(v){ return v && typeof v.name==="string" && Array.isArray(v.rows) && v.rows.length===N; }
+/// コマアニメとして保存されたものは frames (行の配列の配列) と fps を持つ
+function itemFrames(v){ return (Array.isArray(v.frames) && v.frames.length && v.frames.every(f=>Array.isArray(f)&&f.length===N)) ? v.frames : [v.rows]; }
 function libRender(){
   const el=$("lib"); el.innerHTML="";
   if(!lib.length){ const d=document.createElement("div"); d.className="empty"; d.style.gridColumn="1/-1"; d.textContent="まだ何もありません。描くか取り込んで、名前をつけて保存してください。"; el.appendChild(d); return; }
   for(const it of lib){
     const c=document.createElement("div"); c.className="card"; c.title=it.name;
     const cv=document.createElement("canvas"); cv.width=cv.height=96; drawLed(cv,fromRows(it.rows)); c.appendChild(cv);
-    const nm=document.createElement("div"); nm.className="nm"; nm.textContent=it.name; c.appendChild(nm);
+    const nf=itemFrames(it).length;
+    const nm=document.createElement("div"); nm.className="nm"; nm.textContent=it.name+(nf>1?" ("+nf+"コマ)":""); c.appendChild(nm);
     const del=document.createElement("button"); del.className="warn"; del.textContent="消す";
     del.onclick=e=>{ e.stopPropagation(); if(!confirm("「"+it.name+"」を消します。よろしいですか？")) return; lib=lib.filter(v=>v!==it); libPersist(); libRender(); };
     c.appendChild(del);
-    c.onclick=()=>{ setGrid(fromRows(it.rows)); $("name").value=it.name; status("呼び出しました: "+it.name,"ok"); };
+    c.onclick=()=>{
+      const fr=itemFrames(it);
+      frames=fr.map(fromRows); cur=0; grid=frames[0];
+      if(fr.length>1 && it.fps){ $("aFps").value=it.fps; $("aFps").oninput(); }
+      render(); stripRender(); push();
+      $("name").value=it.name; status("呼び出しました: "+it.name+(fr.length>1?" ("+fr.length+"コマ)":""),"ok");
+    };
     el.appendChild(c);
   }
 }
 $("save").onclick=()=>{
   const nm=$("name").value.trim();
   if(!nm){ status("マーク名を入れてください","err"); $("name").focus(); return; }
-  const rec={name:nm,w:N,h:N,rows:toRows(grid),ts:Date.now()};
+  frames[cur]=grid;
+  const rec={name:nm,w:N,h:N,rows:toRows(frames[0]),ts:Date.now()};
+  if(frames.length>1){ rec.frames=frames.map(toRows); rec.fps=+$("aFps").value; }
   const i=lib.findIndex(v=>v.name===nm);
   if(i>=0) lib[i]=rec; else lib.unshift(rec);
   const ok=libPersist(); libRender(); if(typeof libOptions==="function") libOptions();
@@ -898,6 +997,8 @@ $("libFile").onchange=async e=>{
     for(const v of arr){
       if(!okItem(v)){ skip++; continue; }
       const rec={name:v.name,w:N,h:N,rows:v.rows.map(x=>(x|0)&0xffff),ts:v.ts||Date.now()};
+      const fr=itemFrames(v);
+      if(fr.length>1){ rec.frames=fr.map(f=>f.map(x=>(x|0)&0xffff)); rec.fps=Math.max(1,Math.min(30,v.fps|0||8)); }
       const i=lib.findIndex(x=>x.name===rec.name);
       if(i>=0) lib[i]=rec; else lib.unshift(rec);
       add++;
@@ -915,14 +1016,25 @@ const hex=(v,n)=>"0x"+v.toString(16).toUpperCase().padStart(n,"0");
 function ident(){ const s=$("name").value.trim().toLowerCase().replace(/[^a-z0-9_]/g,"_").replace(/^_+|_+$/g,""); return (s&&!/^[0-9]/.test(s))?s:"mark"; }
 function outText(){
   const rows=toRows(grid);
+  const multi=frames.length>1;
   if(tab==="b"){
     const b=[...toBytes(grid)].map(v=>v.toString(16).toUpperCase().padStart(2,"0"));
     return "# 1コマ = 32バイト (上の行から。各行は左8点→右8点、MSBが左、1=点灯)\n"
       +b.join(" ")+"\n\n# 行ごと\n"
       +rows.map((w,y)=>b[y*2]+" "+b[y*2+1]+"  "+w.toString(2).padStart(16,"0").replace(/0/g,"·").replace(/1/g,"█")).join("\n");
   }
-  if(tab==="j") return JSON.stringify({format:"hexa-matrix-mark",version:1,name:$("name").value.trim()||"mark",w:N,h:N,rows:rows},null,1);
+  if(tab==="j"){
+    const o={format:"hexa-matrix-mark",version:1,name:$("name").value.trim()||"mark",w:N,h:N,rows:toRows(frames[0])};
+    if(multi){ o.frames=frames.map(toRows); o.fps=+$("aFps").value; }
+    return JSON.stringify(o,null,1);
+  }
   const id=ident(), up=id.toUpperCase();
+  if(multi){
+    return "// 16x16 x "+frames.length+"コマ / 1=点灯 / bit15が左端 / "+$("aFps").value+"コマ/秒\n"
+      +"const uint16_t "+up+"["+frames.length+"][16] = {\n"
+      +frames.map((f,k)=>"  { // "+(k+1)+"\n"+toRows(f).map(w=>"    "+hex(w,4)+",  // "+w.toString(2).padStart(16,"0").replace(/0/g,"·").replace(/1/g,"█")).join("\n")+"\n  },").join("\n")
+      +"\n};\n";
+  }
   return "// 16x16 / 1=点灯 / bit15が左端\n"
     +"const uint16_t "+up+"[16] = {\n"
     +rows.map(w=>"  "+hex(w,4)+",  // "+w.toString(2).padStart(16,"0").replace(/0/g,"·").replace(/1/g,"█")).join("\n")
@@ -1273,7 +1385,8 @@ function newScene(kind){
   const base={kind:kind,in:"none",show:"static",out:"none",speed:6,hold:2,loops:1,bri:8};
   if(kind==="text") return Object.assign(base,{text:"HEXA STAGE",size:16,bold:false,show:"scrollL"});
   if(kind==="mark") return Object.assign(base,{rows:toRows(grid),name:$("name").value.trim()||"いまのマーク",in:"zoom",show:"breathe",out:"dissolve"});
-  return Object.assign(base,{frames:[toRows(grid)],fps:6,show:"play",hold:3});
+  frames[cur]=grid;                                   // マーク画面のコマを全部使う
+  return Object.assign(base,{frames:frames.map(toRows),fps:frames.length>1?+$("aFps").value:6,show:"play",hold:3});
 }
 function demoProgram(){
   return {name:"はじめての番組",scenes:[
@@ -1375,7 +1488,7 @@ fillSelect($("fIn"),IN_OPTS); fillSelect($("fOut"),IN_OPTS);
 function libOptions(){
   const el=$("fLib"); el.innerHTML="";
   const o0=document.createElement("option"); o0.value=""; o0.textContent=lib.length?"マーク置き場から選ぶ…":"(マーク置き場は空です)"; el.appendChild(o0);
-  lib.forEach((it,i)=>{ const o=document.createElement("option"); o.value=i; o.textContent=it.name; el.appendChild(o); });
+  lib.forEach((it,i)=>{ const n=itemFrames(it).length; const o=document.createElement("option"); o.value=i; o.textContent=it.name+(n>1?" ("+n+"コマ)":""); el.appendChild(o); });
 }
 function formFill(){
   const sc=curSc(); if(!sc) return;
@@ -1431,13 +1544,23 @@ for(const k of ["speed","hold","loops","bri"]) $("f_"+k).oninput=e=>upd(k,+e.tar
 $("fLib").onchange=e=>{
   const it=lib[+e.target.value]; e.target.value=""; if(!it) return;
   const sc=curSc();
-  if(sc.kind==="anim"){ sc.frames.push(it.rows.slice()); animRender(); }
+  const fr=itemFrames(it);
+  if(sc.kind==="anim"){
+    if(fr.length>1){ sc.frames=fr.map(f=>f.slice()); if(it.fps) sc.fps=it.fps; }   // コマアニメはまるごと入れ替える
+    else sc.frames.push(it.rows.slice());
+    animRender();
+  }
   else{ sc.rows=it.rows.slice(); sc.name=it.name; }
   changed(); formFill();
 };
 $("fFromEd").onclick=()=>{
   const sc=curSc();
-  if(sc.kind==="anim"){ sc.frames.push(toRows(grid)); animRender(); }
+  frames[cur]=grid;
+  if(sc.kind==="anim"){
+    if(frames.length>1){ sc.frames=frames.map(toRows); sc.fps=+$("aFps").value; }    // コマが複数ならまるごと
+    else sc.frames.push(toRows(grid));
+    animRender();
+  }
   else{ sc.rows=toRows(grid); sc.name=$("name").value.trim()||"いまのマーク"; }
   changed(); formFill();
 };
@@ -1582,6 +1705,226 @@ async function progInit(){
 }
 
 // ============================================================
+// コマアニメ (マークを作る画面)
+//   frames[] に16×16のコマを並べる。grid はいつも frames[cur] (いま描いているコマ)。
+//   再生は大きいグリッドに表示し、「描いたらすぐ映す」がオンなら実機にも流す。
+// ============================================================
+const MAX_FRAMES=64;
+const AN={playing:false, timer:0, i:0, next:0};
+
+/// コマの帯 (サムネイル) を作り直す
+function stripRender(){
+  const el=$("fstrip"); el.innerHTML="";
+  frames.forEach((f,k)=>{
+    const d=document.createElement("div"); d.className="ft"+(k===cur?" sel":""); d.dataset.n=k;   // data-k は設定フォームの表示切替で使っているので別名
+    const cv=document.createElement("canvas"); cv.width=cv.height=40; drawLed(cv,f); d.appendChild(cv);
+    const n=document.createElement("span"); n.textContent=k+1; d.appendChild(n);
+    d.title=(k+1)+"コマめ";
+    d.onclick=()=>gotoFrame(k);
+    el.appendChild(d);
+  });
+  const add=document.createElement("div"); add.className="ft add";
+  const b=document.createElement("button"); b.textContent="＋"; b.title="白紙のコマを最後に足す";
+  b.onclick=()=>{ if(frames.length>=MAX_FRAMES){ status("コマは"+MAX_FRAMES+"までです","err"); return; }
+    animStop(true); frames.push(new Uint8Array(NN)); gotoFrame(frames.length-1); push(); };
+  add.appendChild(b); el.appendChild(add);
+  animInfo();
+  // 今のコマが見える所まで帯だけを横に送る (scrollIntoView はページごと動くので使わない)
+  const s=el.children[cur];
+  if(s){ const l=s.offsetLeft-el.offsetLeft; if(l<el.scrollLeft||l+45>el.scrollLeft+el.clientWidth) el.scrollLeft=Math.max(0,l-el.clientWidth/2+20); }
+}
+/// 1コマぶんのサムネイルだけ描き直す (なぞっている間はこちらで軽く済ませる)
+function stripThumb(k){
+  const d=$("fstrip").children[k]; if(!d) return;
+  const cv=d.querySelector("canvas"); if(cv) drawLed(cv,frames[k]);
+}
+function animInfo(){
+  const fps=+$("aFps").value, n=frames.length;
+  $("fInfo").textContent="コマ "+(cur+1)+" / "+n+(n>1?"":"  (コマを足すとアニメになります)");
+  $("aDur").textContent = n>1 ? "ひとまわり "+(n/fps).toFixed(2)+"秒" : "";
+  $("fDel").disabled = n<=1; $("fLeft").disabled = cur<=0; $("fRight").disabled = cur>=n-1;
+  $("aPlay").disabled = n<=1;
+}
+function gotoFrame(k){
+  if(k<0||k>=frames.length) return;
+  animStop(true);
+  frames[cur]=grid; cur=k; grid=frames[cur];
+  render(); stripRender();
+}
+function insertFrame(b){
+  if(frames.length>=MAX_FRAMES){ status("コマは"+MAX_FRAMES+"までです","err"); return; }
+  animStop(true);
+  frames[cur]=grid; frames.splice(cur+1,0,b); cur++; grid=frames[cur];
+  render(); stripRender(); push();
+}
+$("fAdd").onclick=()=>insertFrame(new Uint8Array(NN));
+$("fDup").onclick=()=>insertFrame(grid.slice());
+$("fDel").onclick=()=>{
+  if(frames.length<=1) return;
+  animStop(true);
+  frames.splice(cur,1); if(cur>=frames.length) cur=frames.length-1; grid=frames[cur];
+  render(); stripRender(); push();
+};
+function moveFrame(d){
+  const j=cur+d; if(j<0||j>=frames.length) return;
+  animStop(true);
+  frames[cur]=grid; const t=frames[cur]; frames[cur]=frames[j]; frames[j]=t; cur=j; grid=frames[cur];
+  render(); stripRender(); push();
+}
+$("fLeft").onclick=()=>moveFrame(-1);
+$("fRight").onclick=()=>moveFrame(1);
+$("onion").onclick=e=>{ onionOn=!onionOn; e.target.classList.toggle("sel",onionOn); render(); };
+
+// ---- 再生 ----
+function showCells(b){
+  for(let i=0;i<NN;i++){ cells[i].classList.toggle("on",!!b[i]); cells[i].classList.remove("onion"); }
+  drawLed($("pv"),b);
+}
+function animStop(quiet){
+  if(!AN.playing) return;
+  AN.playing=false; clearTimeout(AN.timer);
+  $("aPlay").textContent="▶ 再生"; gridEl.classList.remove("playing");
+  document.querySelectorAll(".ft.play").forEach(x=>x.classList.remove("play"));
+  if(!quiet) render();                     // 描いていたコマの表示に戻す
+}
+function animTick(){
+  if(!AN.playing) return;
+  const k=AN.i%frames.length, f=frames[k];
+  showCells(f);
+  document.querySelectorAll(".ft.play").forEach(x=>x.classList.remove("play"));
+  const t=$("fstrip").children[k]; if(t) t.classList.add("play");
+  if(curView==="mark" && $("live").checked) queueFrame(f);
+  AN.i++;
+  AN.next+=1000/(+$("aFps").value);
+  const now=performance.now();
+  if(AN.next<now-300) AN.next=now;
+  AN.timer=setTimeout(animTick,Math.max(0,AN.next-now));
+}
+function animStart(){
+  if(frames.length<2) return;
+  frames[cur]=grid;
+  AN.playing=true; AN.i=cur; AN.next=performance.now();
+  $("aPlay").textContent="■ 止める"; gridEl.classList.add("playing");
+  animTick();
+}
+$("aPlay").onclick=()=>{ AN.playing ? animStop() : animStart(); };
+$("aFps").oninput=()=>{ $("aFpsV").textContent=$("aFps").value+"コマ/秒"; animInfo(); };
+// 再生中にグリッドを押したら止めて、そのコマから描けるようにする
+gridEl.addEventListener("pointerdown",()=>{ if(AN.playing) animStop(); },true);
+// [ と ] でコマを移動
+window.addEventListener("keydown",e=>{
+  if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || curView!=="mark") return;
+  if(e.key==="["){ e.preventDefault(); gotoFrame(cur-1); }
+  else if(e.key==="]"){ e.preventDefault(); gotoFrame(cur+1); }
+});
+
+// ---- 番組に入れる ----
+$("aToProg").onclick=()=>{
+  frames[cur]=grid;
+  const nm=$("name").value.trim();
+  let sc;
+  if(frames.length<2){
+    sc=newScene("mark");
+  }else{
+    sc=newScene("anim");
+    sc.frames=frames.map(toRows); sc.fps=+$("aFps").value;
+    sc.hold=Math.max(0.5,Math.min(10,Math.round(frames.length/sc.fps*2)/2));   // 1まわり以上は見せる
+    if(nm) sc.name=nm;
+  }
+  prog.scenes.push(sc); sel=prog.scenes.length-1; changed(true);
+  status("番組の最後に入れました (シーン"+prog.scenes.length+" / "+(frames.length<2?"マーク":frames.length+"コマ")+")。「番組を作る」で動きを決められます","ok");
+};
+
+// ============================================================
+// トゥイーン (自動中割り)
+//   今のコマの絵を、はじめ→おわり の間で 位置・大きさ・点の残り を補間して並べる。
+//   LEDは点くか消えるかだけなので、「点の残り」は 4×4 の網目 (Bayer) で間引いて表す。
+// ============================================================
+const TW_BAYER=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+function twBounce(t){
+  const n=7.5625, d=2.75;
+  if(t<1/d) return n*t*t;
+  if(t<2/d) return n*(t-=1.5/d)*t+0.75;
+  if(t<2.5/d) return n*(t-=2.25/d)*t+0.9375;
+  return n*(t-=2.625/d)*t+0.984375;
+}
+const TW_EASE={
+  linear:t=>t,
+  easeIn:t=>t*t*t,
+  easeOut:t=>1-Math.pow(1-t,3),
+  easeInOut:t=>t<0.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2,
+  bounce:twBounce
+};
+/// src を 大きさ s (中心基準) → (dx,dy) ずらし → 点の残り op で間引いた新しいコマ
+function tweenFrame(src,dx,dy,s,op){
+  const o=new Uint8Array(NN);
+  if(s<=0.001 || op<=0) return o;
+  for(let y=0;y<N;y++)for(let x=0;x<N;x++){
+    const sx=Math.floor((x-dx-7.5)/s+7.5+1e-6), sy=Math.floor((y-dy-7.5)/s+7.5+1e-6);
+    if(sx<0||sx>=N||sy<0||sy>=N||!src[sy*N+sx]) continue;
+    if(op<1 && (TW_BAYER[y&3][x&3]+0.5)/16>=op) continue;
+    o[y*N+x]=1;
+  }
+  return o;
+}
+/// 設定から n コマを作る (純粋な計算。テストしやすいよう DOM に触れない)
+function tweenMake(src,p){
+  const n=Math.max(2,Math.min(32,p.n|0)), ease=TW_EASE[p.ease]||TW_EASE.linear, out=[];
+  for(let f=0;f<n;f++){
+    // 片道は f/(n-1) でおわりに着く。往復は f/n にして、ループのつなぎ目で同じ絵が2回続かないようにする
+    let t = p.pp ? f/n : f/(n-1);
+    if(p.pp) t = t<=0.5 ? t*2 : (1-t)*2;
+    const e=ease(t), L=(a,b)=>a+(b-a)*e;
+    out.push(tweenFrame(src, Math.round(L(p.sx,p.ex)), Math.round(L(p.sy,p.ey)),
+                        L(p.ss,p.es)/100, L(p.so,p.eo)/100));
+  }
+  return out;
+}
+const TW_PRESETS={
+  sway:   {sx:0,  ex:0,  sy:0,   ey:-3, ss:100,es:100,so:100,eo:100,n:8, ease:"easeInOut",pp:true},
+  inL:    {sx:-16,ex:0,  sy:0,   ey:0,  ss:100,es:100,so:100,eo:100,n:10,ease:"easeOut",  pp:false},
+  outR:   {sx:0,  ex:16, sy:0,   ey:0,  ss:100,es:100,so:100,eo:100,n:10,ease:"easeIn",   pp:false},
+  inT:    {sx:0,  ex:0,  sy:-16, ey:0,  ss:100,es:100,so:100,eo:100,n:12,ease:"bounce",   pp:false},
+  pop:    {sx:0,  ex:0,  sy:6,   ey:0,  ss:100,es:100,so:0,  eo:100,n:6, ease:"easeOut",  pp:false},
+  fadeIn: {sx:0,  ex:0,  sy:0,   ey:0,  ss:100,es:100,so:0,  eo:100,n:8, ease:"linear",   pp:false},
+  fadeOut:{sx:0,  ex:0,  sy:0,   ey:0,  ss:100,es:100,so:100,eo:0,  n:8, ease:"linear",   pp:false},
+  zoomIn: {sx:0,  ex:0,  sy:0,   ey:0,  ss:0,  es:100,so:100,eo:100,n:8, ease:"easeOut",  pp:false},
+  beat:   {sx:0,  ex:0,  sy:0,   ey:0,  ss:100,es:125,so:100,eo:100,n:6, ease:"easeInOut",pp:true}
+};
+const TW_IDS={sx:"twSX",ex:"twEX",sy:"twSY",ey:"twEY",ss:"twSS",es:"twES",so:"twSO",eo:"twEO",n:"twN"};
+$("twPreset").onchange=e=>{
+  const p=TW_PRESETS[e.target.value]; if(!p) return;
+  for(const k in TW_IDS) $(TW_IDS[k]).value=p[k];
+  $("twEase").value=p.ease; $("twPP").checked=p.pp;
+  status("ひな形を入れました。「コマを作る」で反映されます","ok");
+};
+function twParams(){
+  const p={}, num=id=>{ const v=parseFloat($(id).value); return Number.isFinite(v)?v:0; };
+  for(const k in TW_IDS) p[k]=num(TW_IDS[k]);
+  p.sx=Math.max(-16,Math.min(16,p.sx)); p.ex=Math.max(-16,Math.min(16,p.ex));
+  p.sy=Math.max(-16,Math.min(16,p.sy)); p.ey=Math.max(-16,Math.min(16,p.ey));
+  p.ss=Math.max(0,Math.min(300,p.ss)); p.es=Math.max(0,Math.min(300,p.es));
+  p.so=Math.max(0,Math.min(100,p.so)); p.eo=Math.max(0,Math.min(100,p.eo));
+  p.ease=$("twEase").value; p.pp=$("twPP").checked;
+  return p;
+}
+$("twGen").onclick=()=>{
+  animStop(true);
+  frames[cur]=grid;
+  if(!grid.some(v=>v)){ status("今のコマが空です。絵を描くか呼び出してから作ってください","err"); return; }
+  const p=twParams(), made=tweenMake(grid,p);
+  const replace=$("twPlace").value==="replace";
+  if(frames.length-(replace?1:0)+made.length>MAX_FRAMES){
+    status("コマが"+MAX_FRAMES+"を超えます。コマ数を減らすか、いらないコマを消してください","err"); return;
+  }
+  if(replace){ frames.splice(cur,1,...made); }
+  else{ frames.splice(cur+1,0,...made); cur++; }
+  grid=frames[cur];
+  render(); stripRender(); push();
+  status(made.length+"コマ作りました"+(p.pp?" (往復)":"")+"。▶ 再生で確かめられます","ok");
+};
+
+// ============================================================
 // 本体の番組 (SD / 本体フラッシュ)。ファームの hxm_xfer.h と対になる
 // ============================================================
 const HXF={BEGIN:0x10,DATA:0x11,END:0x12,LIST:0x13,DEL:0x14,PLAY:0x15};
@@ -1686,7 +2029,7 @@ $("devSave").onclick=()=>devDo(async()=>{
   setTimeout(()=>{ $("devProg").style.display="none"; },1500);
 });
 
-libLoad(); libRender(); render(); push();
+libLoad(); libRender(); render(); stripRender(); push();
 progInit();
 </script>
 </body>

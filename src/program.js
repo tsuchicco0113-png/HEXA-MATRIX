@@ -46,7 +46,8 @@ function newScene(kind){
   const base={kind:kind,in:"none",show:"static",out:"none",speed:6,hold:2,loops:1,bri:8};
   if(kind==="text") return Object.assign(base,{text:"HEXA STAGE",size:16,bold:false,show:"scrollL"});
   if(kind==="mark") return Object.assign(base,{rows:toRows(grid),name:$("name").value.trim()||"いまのマーク",in:"zoom",show:"breathe",out:"dissolve"});
-  return Object.assign(base,{frames:[toRows(grid)],fps:6,show:"play",hold:3});
+  frames[cur]=grid;                                   // マーク画面のコマを全部使う
+  return Object.assign(base,{frames:frames.map(toRows),fps:frames.length>1?+$("aFps").value:6,show:"play",hold:3});
 }
 function demoProgram(){
   return {name:"はじめての番組",scenes:[
@@ -148,7 +149,7 @@ fillSelect($("fIn"),IN_OPTS); fillSelect($("fOut"),IN_OPTS);
 function libOptions(){
   const el=$("fLib"); el.innerHTML="";
   const o0=document.createElement("option"); o0.value=""; o0.textContent=lib.length?"マーク置き場から選ぶ…":"(マーク置き場は空です)"; el.appendChild(o0);
-  lib.forEach((it,i)=>{ const o=document.createElement("option"); o.value=i; o.textContent=it.name; el.appendChild(o); });
+  lib.forEach((it,i)=>{ const n=itemFrames(it).length; const o=document.createElement("option"); o.value=i; o.textContent=it.name+(n>1?" ("+n+"コマ)":""); el.appendChild(o); });
 }
 function formFill(){
   const sc=curSc(); if(!sc) return;
@@ -204,13 +205,23 @@ for(const k of ["speed","hold","loops","bri"]) $("f_"+k).oninput=e=>upd(k,+e.tar
 $("fLib").onchange=e=>{
   const it=lib[+e.target.value]; e.target.value=""; if(!it) return;
   const sc=curSc();
-  if(sc.kind==="anim"){ sc.frames.push(it.rows.slice()); animRender(); }
+  const fr=itemFrames(it);
+  if(sc.kind==="anim"){
+    if(fr.length>1){ sc.frames=fr.map(f=>f.slice()); if(it.fps) sc.fps=it.fps; }   // コマアニメはまるごと入れ替える
+    else sc.frames.push(it.rows.slice());
+    animRender();
+  }
   else{ sc.rows=it.rows.slice(); sc.name=it.name; }
   changed(); formFill();
 };
 $("fFromEd").onclick=()=>{
   const sc=curSc();
-  if(sc.kind==="anim"){ sc.frames.push(toRows(grid)); animRender(); }
+  frames[cur]=grid;
+  if(sc.kind==="anim"){
+    if(frames.length>1){ sc.frames=frames.map(toRows); sc.fps=+$("aFps").value; }    // コマが複数ならまるごと
+    else sc.frames.push(toRows(grid));
+    animRender();
+  }
   else{ sc.rows=toRows(grid); sc.name=$("name").value.trim()||"いまのマーク"; }
   changed(); formFill();
 };
