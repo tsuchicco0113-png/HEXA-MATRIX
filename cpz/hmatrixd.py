@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -316,28 +316,47 @@ class Link:
         """FILE_BEGIN / DATA / END でファイルを送る。名前が @ で始まると本体はメモリに置いて流す (v0.6〜)
         Wi-Fi では返事を待たずに数個先まで送る (往復の待ち時間で遅くならないように)。
         USB は本体の受信バッファが小さいので1つずつ。"""
-        win = 8 if self.kind == "wifi" else 1
-        self.request(packet(T_BEGIN, struct.pack("<I", len(data)) + name.encode()),
-                     lambda j: j.get("ack") == "begin", 4)
-        pend = []
+        wifi = self.kind == "wifi"
+        win = 8 if wifi else 1
+        tmo = 8 if wifi else 4        # Wi-Fi は無線の再送で数秒遅れることがある
+        n = (len(data) + CHUNK - 1) // CHUNK
+        step = "開始"
         try:
-            for seq, off in enumerate(range(0, len(data), CHUNK)):
-                s = seq & 0xFFFF
-                w = self.expect(lambda j, s=s: j.get("ack") == s)
-                pend.append(w)
-                if not self.send(packet(T_DATA, struct.pack("<H", s) + data[off:off + CHUNK])):
-                    raise RuntimeError("本体がつながっていません")
-                if len(pend) >= win:
-                    self.wait(pend.pop(0), 4)
-                if progress:
-                    progress(min(len(data), off + CHUNK))
-            while pend:
-                self.wait(pend.pop(0), 4)
-        finally:
-            for w in pend:
-                self.forget(w)
-        return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
-                            lambda j: "saved" in j or "clip" in j, 8)
+            self.request(packet(T_BEGIN, struct.pack("<I", len(data)) + name.encode()),
+                         lambda j: j.get("ack") == "begin", tmo)
+            pend = []
+            try:
+                for seq, off in enumerate(range(0, len(data), CHUNK)):
+                    s = seq & 0xFFFF
+                    w = self.expect(lambda j, s=s: j.get("ack") == s)
+                    w["seq"] = seq
+                    pend.append(w)
+                    if not self.send(packet(T_DATA, struct.pack("<H", s) + data[off:off + CHUNK])):
+                        raise RuntimeError("本体がつながっていません")
+                    if len(pend) >= win:
+                        step = f"中身 {pend[0]['seq'] + 1}/{n}"
+                        self.wait(pend.pop(0), tmo)
+                    if progress:
+                        progress(min(len(data), off + CHUNK))
+                while pend:
+                    step = f"中身 {pend[0]['seq'] + 1}/{n}"
+                    self.wait(pend.pop(0), tmo)
+            finally:
+                for w in pend:
+                    self.forget(w)
+            step = "終わり"
+            return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
+                                lambda j: "saved" in j or "clip" in j, tmo + 4)
+        except RuntimeError as e:
+            raise RuntimeError(f"{e} ({step})") from None
+
+    def diag(self):
+        """本体の受け取りの記録を聞いて、ログ用の1行にする (v0.9.2 以上のファーム)"""
+        try:
+            j = self.request(packet(T_PING), lambda j: "fw" in j, 4)
+        except RuntimeError as e:
+            return f"PING も返事なし: {e}"
+        return f"fw {j.get('fw')} net {json.dumps(j.get('net', {}), ensure_ascii=False)}"
 
 
 ERR_TEXT = {"no storage": "保存先がありません", "bad name": "ファイル名が使えません", "no space": "空きが足りません",
@@ -552,6 +571,7 @@ class Hub:
                         self.link.transfer("@live" if loop else "@once", data)
                     except RuntimeError as e:
                         log(f"clip try {attempt} failed via {self.link.kind}:", e)
+                        log("  本体:", self.link.diag())
                         time.sleep(0.5)
                         continue
                     log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")

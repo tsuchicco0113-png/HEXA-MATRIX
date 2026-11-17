@@ -21,13 +21,15 @@ def crc8(d):
         c ^= b
         for _ in range(8): c = ((c << 1) ^ 7) & 255 if c & 128 else (c << 1) & 255
     return c
+LOSE = int(sys.argv[sys.argv.index("--lose") + 1]) if "--lose" in sys.argv else 0   # 最初の N 回の BEGIN を黙って捨てる
 DELAY = float(sys.argv[sys.argv.index("--delay") + 1]) / 1000 if "--delay" in sys.argv else 0   # 返事の遅れ (Wi-Fi のまね)
 def out(j):
     if DELAY: time.sleep(DELAY)
     try: os.write(m, (json.dumps(j) + "\n").encode())
     except (OSError, TypeError): pass
 def status(): out({"ok": True, "dev": "corematrix", "fw": "0.6.0", "bri": liveBri, "rot": rot, "frames": stats["frames"],
-                   "store": "sd", "sd": "ok", "n": len(FILES), "cur": cur, "paused": paused, "live": live, "master": 4, "wifi": "ok" if TCP else "off", "ip": "", "name": "hexamatrix"})
+                   "store": "sd", "sd": "ok", "n": len(FILES), "cur": cur, "paused": paused, "live": live, "master": 4, "wifi": "ok" if TCP else "off", "ip": "", "name": "hexamatrix",
+                   "net": {"begin": stats.get("begin", 0), "drop": stats.get("drop", 0)}})
 def names(): return sorted(FILES)
 def lst(): out({"ok": True, "list": True, "store": "sd", "sd": "ok", "free": 1000000, "cur": cur, "paused": paused,
                "files": [{"n": n, "s": len(FILES[n])} for n in names()]})
@@ -42,6 +44,9 @@ def handle(t, p):
     elif t == 3: status()
     elif t == 4: rot = p[0] & 3; status()
     elif t == 0x10:
+        global LOSE
+        stats["begin"] = stats.get("begin", 0) + 1
+        if LOSE > 0: LOSE -= 1; return
         sz = struct.unpack_from("<I", p)[0]; n = p[4:].decode()
         if n.startswith("@"):
             up = {"name": n, "size": sz, "seq": 0, "data": bytearray(), "ram": True}; out({"ok": True, "ack": "begin"}); return
@@ -49,7 +54,7 @@ def handle(t, p):
         up = {"name": n, "size": sz, "seq": 0, "data": bytearray()}; out({"ok": True, "ack": "begin"})
     elif t == 0x11:
         sq = struct.unpack_from("<H", p)[0]
-        if not up: return                      # v0.9.1: 始まっていない受け取りの残りは黙って捨てる
+        if not up: stats["drop"] = stats.get("drop", 0) + 1; return   # v0.9.1: 始まっていない受け取りの残りは黙って捨てる
         if sq != up["seq"]: up = None; return err("seq")
         up["data"] += p[2:]; up["seq"] = (sq + 1) & 0xFFFF; out({"ok": True, "ack": sq})
     elif t == 0x12:

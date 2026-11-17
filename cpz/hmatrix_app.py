@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)

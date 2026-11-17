@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.1 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.2 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -42,7 +42,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.1";
+static const char* FW_VER = "0.9.2";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -66,6 +66,8 @@ static WiFiClient client;
 static char     wName[32] = "hexamatrix";
 static bool     wifiOn = false, serverUp = false, mdnsUp = false, wifiShown = false;
 static uint32_t lastNetByte = 0;
+// Wi-Fi の受け取りの記録 (v0.9.2: 転送がうまくいかない時の切り分け用。PING の返事の "net" に出す)
+static uint32_t netBytes = 0, netConns = 0, netDrop = 0, netBegin = 0, netData = 0, netEnd = 0;
 static Preferences prefs;
 static uint8_t  frame[32];
 static uint8_t  rot = 1;
@@ -161,12 +163,18 @@ static void sendStatus() {
   out->printf("{\"ok\":true,\"dev\":\"corematrix\",\"fw\":\"%s\",\"bri\":%u,\"rot\":%u,"
                 "\"frames\":%lu,\"rx_ok\":%lu,\"rx_bad\":%lu,\"draw_us\":%lu,"
                 "\"store\":\"%s\",\"sd\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u,"
-                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s}\n",
+                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s,"
+                "\"net\":{\"rssi\":%d,\"sleep\":%d,\"conn\":%lu,\"bytes\":%lu,\"ok\":%lu,\"bad\":%lu,"
+                "\"begin\":%lu,\"data\":%lu,\"end\":%lu,\"drop\":%lu,\"up\":%d,\"got\":%lu}}\n",
                 FW_VER, liveBri, rot, (unsigned long)frames,
                 (unsigned long)(usbParser.ok + netParser.ok), (unsigned long)(usbParser.bad + netParser.bad), (unsigned long)lastDrawUs,
                 store, sdState(), nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1,
                 wifiState(), wifiOn && WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "", wName,
-                clipMode ? "true" : "false");
+                clipMode ? "true" : "false",
+                wifiOn && WiFi.status() == WL_CONNECTED ? (int)WiFi.RSSI() : 0, (int)WiFi.getSleep(),
+                (unsigned long)netConns, (unsigned long)netBytes, (unsigned long)netParser.ok, (unsigned long)netParser.bad,
+                (unsigned long)netBegin, (unsigned long)netData, (unsigned long)netEnd, (unsigned long)netDrop,
+                up.active ? 1 : 0, (unsigned long)up.got);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -327,6 +335,7 @@ static void handleFile() {
   const uint8_t* b = pk->buf; uint8_t n = pk->len;
   switch (pk->type) {
     case HXM_FILE_BEGIN: {
+      if (out == &client) netBegin++;
       abortUpload();
       if (n >= 5 && b[4] == '@') {                // 一時再生: メモリに受け取る
         uint32_t sz = hxm_u32(b);
@@ -358,7 +367,8 @@ static void handleFile() {
     case HXM_FILE_DATA: {
       // 受け取りが始まっていない (前の受け取りを打ち切った後に遅れて届いた残り) は黙って捨てる。
       // ここでエラーを返すと、送り側の「次の」受け取りを失敗させてしまう (v0.9.1 で修正)
-      if (!up.active) return;
+      if (out == &client) netData++;
+      if (!up.active) { if (out == &client) netDrop++; return; }
       if (n < 2) { sendErr("bad data"); return; }
       uint16_t s = hxm_u16(b);
       uint32_t off = up.got;
@@ -370,7 +380,8 @@ static void handleFile() {
       out->printf("{\"ok\":true,\"ack\":%u}\n", s);
       return; }
     case HXM_FILE_END: {
-      if (!up.active) return;                     // 同上
+      if (out == &client) netEnd++;
+      if (!up.active) { if (out == &client) netDrop++; return; }   // 同上
       if (n != 4) { sendErr("bad end"); return; }
       int r = up.finish(hxm_u32(b));
       if (upRam) {
@@ -454,9 +465,9 @@ static void wifiSetup() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(wName);
   WiFi.setAutoReconnect(true);
-  // v0.9: 省電力は既定で入れる。CPZ はコマ列をまとめて送って本体が自分で流すので、受信の遅れは見た目に出ない。
-  //       切ると無線が常に動いて電流が増え、Wi-Fi 中だけ表示がちらつく (実機で確認された症状) 原因になりうる
-  WiFi.setSleep(prefs.getChar("wsleep", 1) != 0);
+  // v0.9.2: 省電力は既定で切る (v0.9 で入れたが、受信が遅れたり抜けたりして転送が止まる原因だった。
+  //         ちらつきの本当の原因は転送失敗で1コマずつ送りになっていたこと)。wifi.txt の sleep=on で入れられる
+  WiFi.setSleep(prefs.getChar("wsleep", 0) != 0);
   WiFi.begin(ssid.c_str(), pass.c_str());
   WiFi.setTxPower((wifi_power_t)(prefs.getChar("wtx", 15) * 4));   // 0.25dBm 単位
   wifiOn = true;
@@ -476,7 +487,7 @@ static void netTick(uint32_t now) {
     WiFiClient nc = server.accept();
     if (nc) {                                        // 新しくつないできた方を使う (古い方は切る)
       if (client) client.stop();
-      client = nc; client.setNoDelay(true); netParser.reset(); lastNetByte = now;
+      client = nc; client.setNoDelay(true); netParser.reset(); lastNetByte = now; netConns++;
       if (up.active && upFromNet) abortUpload();   // つなぎ直したら前の受け取りは無効
     }
   } else if (mdnsUp) { MDNS.end(); mdnsUp = false; }
@@ -485,10 +496,13 @@ static void netTick(uint32_t now) {
     while ((n = client.available()) > 0) {
       int r = client.read(b, n < (int)sizeof b ? n : (int)sizeof b);
       if (r <= 0) break;
+      netBytes += r;
       for (int i = 0; i < r; i++) feedByte(netParser, &client, b[i]);
       lastNetByte = millis();
     }
-    if (!netParser.idle() && millis() - lastNetByte > 300) netParser.reset();
+    // v0.9.2: TCP は途中が抜けない (遅れて必ず届く) ので、間が空いてもパケットを捨てない。
+    //         以前は 0.3 秒で捨てていて、無線の再送で遅れたパケットが丸ごと消え、転送が止まっていた
+    if (!netParser.idle() && millis() - lastNetByte > 10000) netParser.reset();
   }
 }
 
