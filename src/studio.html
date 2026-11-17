@@ -205,6 +205,7 @@
         </div>
         <div class="grp">
           <button id="aPlay" class="primary">▶ 再生</button>
+          <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="aLoop" checked> くりかえす</label>
           <input type="range" id="aFps" min="1" max="30" value="8" style="flex:1;min-width:80px">
           <span class="val" id="aFpsV">8コマ/秒</span>
         </div>
@@ -394,7 +395,10 @@
           <button id="devRefresh" disabled>一覧を更新</button>
           <button id="devPause" disabled title="本体で流している番組を止めます">本体を止める</button></div>
         <div id="devList"></div>
-        <div class="grp" style="margin-top:10px">
+        <div class="grp" style="margin-top:10px"><span class="lbl">流し方</span>
+          <select id="pRepeat"><option value="loop">連続再生 (くりかえす)</option><option value="once">1回だけ</option></select>
+          <span class="lbl" id="loopNote"></span></div>
+        <div class="grp">
           <input type="text" id="devName" maxlength="40" placeholder="01_program.hxm" style="flex:1 1 140px" aria-label="本体に保存する名前">
           <button id="devSave" class="primary" disabled>この番組を本体に保存</button>
         </div>

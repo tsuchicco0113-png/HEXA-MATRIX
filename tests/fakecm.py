@@ -56,7 +56,7 @@ def handle(t, p):
         if len(up["data"]) != up["size"]: up = None; return err("size")
         if zlib.crc32(bytes(up["data"])) != c: up = None; return err("crc")
         if up.get("ram"):
-            d = bytes(up["data"]); cnt = struct.unpack_from("<I", d, 4)[0]
+            d = bytes(up["data"]); cnt = struct.unpack_from("<I", d, 4)[0] & 0x7FFFFFFF
             open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} CLIP {up['name']} {cnt} {len(d)}\n")
             open("/tmp/fakecm_clip.hxm", "wb").write(d)
             out({"ok": True, "clip": cnt, "loop": up["name"] == "@live"}); up = None; return

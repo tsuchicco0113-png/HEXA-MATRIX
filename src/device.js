@@ -82,7 +82,7 @@ $("devSave").onclick=()=>devDo(async()=>{
   name=slug(name.replace(/\.hxm$/i,""));
   name = name ? name+".hxm" : suggestName();       // 英数字が残らない名前 (日本語だけ等) は番号付きの名前にする
   $("devName").value=name;
-  const f=renderProgram(programSequence().list), data=bakeBin(f);
+  const f=renderProgram(programSequence().list), data=bakeBin(f,prog.loop===false);
   stopPlay();                                      // 送っている間は実機へのプレビューを止める
   await new Promise(r=>setTimeout(r,120));
   const bar=$("devBar"); bar.style.width="0%"; $("devProg").style.display="block";

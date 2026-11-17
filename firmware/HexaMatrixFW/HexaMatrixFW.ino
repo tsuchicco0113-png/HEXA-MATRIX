@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.7.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.8.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -23,6 +23,8 @@
 //   パスワードは本体に覚えさせて、ファイルは pass=***** に書き換える。つながると「W」が一瞬出る。
 //   TCP 7800 番で USB と同じパケットを受ける (CPZ からは <name>.local で見つける)。返事は来た側へ返す。
 //
+//   1回だけ (v0.8): .hxm のコマ数の最上位ビットが立っている番組は、最後まで流したら消灯して止まる。
+//
 //   一時再生 (v0.6): ファイル名 "@live" (くりかえし) / "@once" (1回) で送ると、保存せずにメモリに置いて
 //   本体の時計で流す。Wi-Fi で1コマずつ流すと届き方がばらついてカクつくため、CPZ はこちらを使う。
 //   流している間は番組を止める。PLAY 0xFE / ボタン / USB のコマ で番組に戻る。
@@ -40,7 +42,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.7.0";
+static const char* FW_VER = "0.8.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -82,6 +84,7 @@ static int      detIn = -1;           // SD が読めた時の検出ピンの値
 // 再生
 static File     pf;
 static int32_t  pfCount = 0, pfIdx = 0;
+static bool     pfOnce = false;        // この番組は1回だけ流す (.hxm の印)
 static int      cur = 0;
 static bool     paused = true;         // true = 番組を流していない (起動時はこちら)
 static uint32_t nextAt = 0, holdUntil = 0;
@@ -248,16 +251,20 @@ static bool openProgram(int i, bool announce) {
   uint8_t h[8];
   int32_t n = (pf && pf.read(h, 8) == 8) ? hxm_check_header(h, pf.size()) : -1;
   if (n < 0) { if (pf) pf.close(); flashText("E", 800); return false; }
-  pfCount = n;
+  pfCount = n; pfOnce = hxm_is_once(h);
   if (announce) { char b[4]; snprintf(b, sizeof b, "%d", cur + 1); flashText(b, 600); }
   nextAt = millis() + (announce ? 600 : 0);
   return true;
 }
+static void goIdle();
 static void playTick() {
   if (live || paused || !pf) return;
   uint32_t now = millis();
   if ((int32_t)(now - holdUntil) < 0 || (int32_t)(now - nextAt) < 0) return;
-  if (pfIdx >= pfCount) { pf.seek(8); pfIdx = 0; }
+  if (pfIdx >= pfCount) {
+    if (pfOnce) { goIdle(); return; }     // 1回だけの番組は流し終えたら消灯 (B でもう一度)
+    pf.seek(8); pfIdx = 0;
+  }
   uint8_t r[35];
   if (pf.read(r, 35) != 35) { pf.seek(8); pfIdx = 0; return; }
   pfIdx++;

@@ -58,9 +58,11 @@ struct HxmUpload {
 };
 
 /// .hxm の頭 8 バイトと全体の大きさから、コマ数を返す (形式が違えば -1)
+///   コマ数の最上位ビットは「1回だけ流す」の印 (v0.8〜)。ここでは外して数える
 static inline int32_t hxm_check_header(const uint8_t* h, uint32_t fileSize) {
   if (h[0] != 'H' || h[1] != 'X' || h[2] != 'M' || h[3] != '1') return -1;
-  uint32_t n = hxm_u32(h + 4);
+  uint32_t n = hxm_u32(h + 4) & 0x7FFFFFFFu;
   if (n == 0 || fileSize != 8 + 35u * n) return -1;
   return (int32_t)n;
 }
+static inline bool hxm_is_once(const uint8_t* h) { return (h[7] & 0x80) != 0; }

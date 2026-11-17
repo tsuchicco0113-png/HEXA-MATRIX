@@ -50,7 +50,7 @@ function newScene(kind){
   return Object.assign(base,{frames:frames.map(toRows),fps:frames.length>1?+$("aFps").value:6,show:"play",hold:3});
 }
 function demoProgram(){
-  return {name:"はじめての番組",scenes:[
+  return {name:"はじめての番組",loop:true,scenes:[
     {kind:"text",text:"HEXA STAGE",size:16,bold:false,in:"none",show:"scrollL",out:"none",speed:6,hold:2,loops:1,bri:8},
     {kind:"mark",rows:HEART_ROWS,name:"heart",in:"zoom",show:"breathe",out:"dissolve",speed:6,hold:3,loops:1,bri:10},
     {kind:"text",text:"ようこそ\nHEXA",size:8,bold:false,in:"type",show:"static",out:"slideU",speed:6,hold:2,loops:1,bri:8},
@@ -61,7 +61,8 @@ function okScene(s){ return s && (s.kind==="text"||s.kind==="mark"||s.kind==="an
 function progLoad(){
   const s=store(); let p=null;
   if(s){ try{ p=JSON.parse(s.getItem(PROG_KEY)||"null"); }catch(e){} }
-  prog = (p && Array.isArray(p.scenes) && p.scenes.filter(okScene).length) ? {name:p.name||"番組",scenes:p.scenes.filter(okScene),header:p.header,footer:p.footer} : demoProgram();
+  prog = (p && Array.isArray(p.scenes) && p.scenes.filter(okScene).length) ? {name:p.name||"番組",scenes:p.scenes.filter(okScene),header:p.header,footer:p.footer,loop:p.loop!==false} : demoProgram();
+  if(prog.loop===undefined) prog.loop=true;
   prog.header=okHF(prog.header,"H"); prog.footer=okHF(prog.footer,"F");
 }
 let saveT=0;
@@ -298,11 +299,20 @@ $("pPlay").onclick=()=>{
   if(f&&f.length) startPlay(f,mode==="all"?"all":"scene");
 };
 $("pMode").onchange=()=>{ if(P.playing){ stopPlay(); $("pPlay").click(); } };
+/// 「くりかえす」は番組の設定。プレビューだけでなく、本体に保存・コマ列の書き出し・CPZに置く にも効く
+function syncLoopUI(){
+  const on=prog.loop!==false;
+  $("pLoop").checked=on;
+  $("pRepeat").value=on?"loop":"once";
+  $("loopNote").textContent=on?"本体では最後まで流したら頭から繰り返します":"本体では1回流したら消灯して止まります (Bでもう一度)";
+}
+$("pLoop").onchange=e=>{ prog.loop=e.target.checked; syncLoopUI(); progSave(); };
+$("pRepeat").onchange=e=>{ prog.loop=e.target.value!=="once"; syncLoopUI(); progSave(); };
 
 // ---- 保存・書き出し ----
 $("progExp").onclick=()=>{
   download((prog.name||"program").replace(/[\\/:*?"<>|]/g,"_")+".hxmprog.json",
-    new Blob([JSON.stringify({format:"hexa-matrix-program",version:1,name:prog.name,scenes:prog.scenes,header:prog.header,footer:prog.footer},null,1)],{type:"application/json"}));
+    new Blob([JSON.stringify({format:"hexa-matrix-program",version:1,name:prog.name,loop:prog.loop!==false,scenes:prog.scenes,header:prog.header,footer:prog.footer},null,1)],{type:"application/json"}));
   status("番組を書き出しました","ok");
 };
 $("progImp").onclick=()=>$("progFile").click();
@@ -312,19 +322,19 @@ $("progFile").onchange=async e=>{
     const j=JSON.parse(await f.text()); const sc=(j.scenes||[]).filter(okScene);
     if(!sc.length) throw new Error("シーンが見つかりません");
     if(!confirm("いまの番組を「"+(j.name||f.name)+"」("+sc.length+"シーン) に置きかえます。よろしいですか？")) return;
-    stopPlay(); prog={name:j.name||"番組",scenes:sc,header:okHF(j.header,"H"),footer:okHF(j.footer,"F")}; sel=0; changed(true); status("読み込みました","ok");
+    stopPlay(); prog={name:j.name||"番組",scenes:sc,header:okHF(j.header,"H"),footer:okHF(j.footer,"F"),loop:j.loop!==false}; sel=0; syncLoopUI(); changed(true); status("読み込みました","ok");
   }catch(err){ status("読み込み失敗: "+err.message,"err"); }
 };
 $("progBin").onclick=()=>{
   const f=safeRender(programSequence().list); if(!f) return;
-  const b=bakeBin(f);
+  const b=bakeBin(f,prog.loop===false);
   download((prog.name||"program").replace(/[\\/:*?"<>|]/g,"_")+".hxm",new Blob([b],{type:"application/octet-stream"}));
   status("コマ列を書き出しました ("+f.length+"コマ / "+(b.length/1024).toFixed(1)+"KB)","ok");
 };
 /// CardputerZero のライブラリに置く (CPZ が同じエンジンでコマ列を作る)
 $("progCpz").onclick=async()=>{
   const name=(prog.name||"番組").trim();
-  const body={name:name,program:{format:"hexa-matrix-program",version:1,name:prog.name,scenes:prog.scenes,header:prog.header,footer:prog.footer}};
+  const body={name:name,program:{format:"hexa-matrix-program",version:1,name:prog.name,loop:prog.loop!==false,scenes:prog.scenes,header:prog.header,footer:prog.footer}};
   $("progCpz").disabled=true;
   try{
     const j=await (await fetch("/api/library",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();
@@ -336,7 +346,7 @@ $("progCpz").onclick=async()=>{
 };
 $("progNew").onclick=()=>{
   if(!confirm("番組を最初の見本に戻します。いまの番組は消えます。よろしいですか？")) return;
-  stopPlay(); prog=demoProgram(); prog.header=defaultHF("H"); prog.footer=defaultHF("F"); sel=0; changed(true);
+  stopPlay(); prog=demoProgram(); prog.header=defaultHF("H"); prog.footer=defaultHF("F"); sel=0; syncLoopUI(); changed(true);
 };
 
 // ---- 画面切替 ----
@@ -353,7 +363,7 @@ function setView(v){
 document.querySelectorAll(".vtabs button").forEach(b=>b.onclick=()=>setView(b.dataset.v));
 
 async function progInit(){
-  progLoad(); sceneRender();
+  progLoad(); syncLoopUI(); sceneRender();
   if(typeof DecompressionStream==="undefined"){
     $("fontErr").style.display="block"; $("fontErr").textContent="このブラウザでは文字を作れません (Chrome 80 以降 / Safari 16.4 以降が必要です)。マークとコマアニメは使えます。";
   }else{

@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -323,7 +323,8 @@ class App:
             d.text((10, 90), "「CPZに置く」を押してください", fill=SUB, font=self.font_s)
             self.draw_qr_small(img, 226, 24)
         else:
-            self.list_draw(d, [(it["title"], f"{it.get('sec') or '?'}秒") for it in self.lib], self.lib_i, 222)
+            self.list_draw(d, [(it["title"], ("1回 " if it.get("once") else "") + f"{it.get('sec') or '?'}秒")
+                               for it in self.lib], self.lib_i, 222)
             self.draw_led(d, 240, 30, pitch=4.6, r=1.8)
             s, col = self.player_line()
             d.text((236, 112), self.ellipsize(s, 80, self.font_t), fill=col, font=self.font_t)

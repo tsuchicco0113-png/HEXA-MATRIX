@@ -267,11 +267,12 @@ function renderProgram(scenes){
   return out;
 }
 /// コマ列のバイナリ: 'HXM1' / u32 コマ数 / コマごとに u16 ms, u8 明るさ, 32バイト
-function bakeBin(frames){
+///   コマ数の最上位ビット (0x80000000) が立っていたら「1回だけ流す」(ファーム v0.8〜)
+function bakeBin(frames,once){
   const parts=[];
   for(const f of frames){ let ms=f.ms; while(ms>0){ const m=Math.min(65535,ms); parts.push([m,f.bri,f.b]); ms-=m; } }
   const o=new Uint8Array(8+parts.length*35), dv=new DataView(o.buffer);
-  o.set([0x48,0x58,0x4D,0x31]); dv.setUint32(4,parts.length,true);
+  o.set([0x48,0x58,0x4D,0x31]); dv.setUint32(4,(parts.length+(once?0x80000000:0))>>>0,true);
   parts.forEach((p,i)=>{ const q=8+i*35; dv.setUint16(q,p[0],true); o[q+2]=p[1]; o.set(toBytes(p[2]),q+3); });
   return o;
 }

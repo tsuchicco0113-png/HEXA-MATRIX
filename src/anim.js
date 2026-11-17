@@ -83,6 +83,7 @@ function animStop(quiet){
 }
 function animTick(){
   if(!AN.playing) return;
+  if(!$("aLoop").checked && AN.i>=AN.end){ animStop(); return; }   // 1回だけ: 最後まで流したら止めて描いていたコマへ
   const k=AN.i%frames.length, f=frames[k];
   showCells(f);
   document.querySelectorAll(".ft.play").forEach(x=>x.classList.remove("play"));
@@ -97,7 +98,7 @@ function animTick(){
 function animStart(){
   if(frames.length<2) return;
   frames[cur]=grid;
-  AN.playing=true; AN.i=cur; AN.next=performance.now();
+  AN.playing=true; AN.i=$("aLoop").checked?cur:0; AN.end=frames.length; AN.next=performance.now();
   $("aPlay").textContent="■ 止める"; gridEl.classList.add("playing");
   animTick();
 }

@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -454,11 +454,11 @@ class Hub:
                 st = os.stat(p)
                 with open(p, "rb") as f:
                     head = f.read(8)
-                n = struct.unpack_from("<I", head, 4)[0] if head[:4] == b"HXM1" else 0
+                n = (struct.unpack_from("<I", head, 4)[0] & 0x7FFFFFFF) if head[:4] == b"HXM1" else 0
                 meta = self._meta(name)
                 out.append({"name": name, "size": st.st_size, "frames": n, "mtime": int(st.st_mtime),
                             "sec": meta.get("sec"), "src": os.path.exists(self._p(name, ".json")),
-                            "title": meta.get("title") or name})
+                            "title": meta.get("title") or name, "once": H.hxm_is_once(head)})
             except OSError:
                 pass
         out.sort(key=lambda x: x["name"])
@@ -486,7 +486,7 @@ class Hub:
                 raise ValueError("シーンがありません")
             t0 = time.time()
             frames = H.render_program(seq)
-            hxm = H.bake_bin(frames)
+            hxm = H.bake_bin(frames, once=program.get("loop") is False)
             log(f"render {name}: {len(frames)} frames {time.time() - t0:.2f}s")
         if not hxm:
             raise ValueError("中身がありません")

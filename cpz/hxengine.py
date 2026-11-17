@@ -505,13 +505,14 @@ def program_sequence(prog):
 # ------------------------------------------------------------------
 # .hxm ('HXM1' / u32 コマ数 / コマごとに u16 ms, u8 明るさ, 32バイト)
 # ------------------------------------------------------------------
-def bake_bin(frames):
+def bake_bin(frames, once=False):
+    """once=True: コマ数の最上位ビットを立てる (本体は1回流したら止まる。ファーム v0.8〜)"""
     parts = []
     for f in frames:
         ms = int(f.ms)
         while ms > 0:
             m = min(65535, ms); parts.append((m, f.bri, f.b)); ms -= m
-    o = bytearray(b"HXM1" + struct.pack("<I", len(parts)))
+    o = bytearray(b"HXM1" + struct.pack("<I", len(parts) | (0x80000000 if once else 0)))
     for m, bri, b in parts:
         o += struct.pack("<HB", m, bri) + to_bytes(b)
     return bytes(o)
@@ -521,7 +522,7 @@ def parse_hxm(data):
     """→ [(ms, bri, 32バイト)]"""
     if data[:4] != b"HXM1":
         raise ValueError("HXM1 ではありません")
-    n = struct.unpack_from("<I", data, 4)[0]
+    n = struct.unpack_from("<I", data, 4)[0] & 0x7FFFFFFF
     if 8 + n * 35 > len(data):
         raise ValueError("ファイルが途中で切れています")
     out = []
@@ -530,6 +531,10 @@ def parse_hxm(data):
         ms, bri = struct.unpack_from("<HB", data, q)
         out.append((ms, bri, bytes(data[q + 3:q + 35])))
     return out
+
+
+def hxm_is_once(data):
+    return len(data) >= 8 and bool(data[7] & 0x80)
 
 
 def say_scene(text, show="scrollL", speed=6, bri=8, size=16, hold=2, loops=1, eff="none", bold=False):
