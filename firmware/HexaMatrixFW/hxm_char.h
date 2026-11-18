@@ -89,6 +89,7 @@ struct HxcWorld {
   /// 目 = 体の中の穴 (上下左右を体に囲まれた空き)。脚 = いちばん下の行の点のかたまり
   void analyze() {
     int ne = 0;
+    eyeX[0] = eyeX[1] = eyeY[0] = eyeY[1] = -1;          // 前のキャラの目を残さない
     for (int yy = 1; yy < sp.h - 1 && ne < 2; yy++)
       for (int xx = 1; xx < sp.w - 1 && ne < 2; xx++)
         if (!sp.px(xx, yy) && sp.px(xx - 1, yy) && sp.px(xx + 1, yy) && sp.px(xx, yy - 1) && sp.px(xx, yy + 1)) {
@@ -199,6 +200,7 @@ struct HxcWorld {
     int gdx, gdy; gdir(q, gdx, gdy);
     int tdx, tdy; tdir(q, tdx, tdy);
     grounded = onFloor();
+    int32_t vn0 = vx * gdx + vy * gdy;                 // このステップで力を足す前の、床へ向かう速さ
     int32_t ax8 = (int32_t)ax * pr.grav / 1000, ay8 = (int32_t)ay * pr.grav / 1000;
     if (pr.slosh) {                    // 回転の慣性: 回し始めると中身が置いていかれる
       int32_t dw = in.wz - lastWz;
@@ -230,18 +232,22 @@ struct HxcWorld {
       if (whimT) whimT--;
       else {
         uint32_t r = rnd(256);
-        if (r < pr.whim / 2) kick(-pr.jump * (2 + (int)rnd(3)) / 5, (int32_t)rnd(3) - 1);
+        if (r < pr.whim / 2) {
+          int32_t k = (int32_t)rnd(3), t = (int32_t)rnd(3);   // 乱数を引く順番を決めておく (引数の中で引くと順番が決まらない)
+          kick(-pr.jump * (2 + k) / 5, t - 1);
+        }
         else { lookX = (int8_t)((int)rnd(3) - 1); lookY = (int8_t)((int)rnd(3) - 1); }
         whimT = (uint16_t)(150 + rnd(300) * (256 - pr.whim) / 128);
       }
     }
 
     // 動かす
-    int32_t vnBefore = vx * gdx + vy * gdy;            // 床へ向かう速さ (+ なら床へ)
     int32_t hitX = moveAxis(true), hitY = moveAxis(false);
     int32_t hitN = gdx ? hitX : hitY;                   // 床/天井にぶつかった速さ
     grounded = onFloor();
-    if (vnBefore > 0 && grounded && hitN > 60) { landT = hitN > 160 ? 10 : 6; }   // 床に落ちた
+    // 床に落ちた: 力を足す前から床へ向かって動いていて (止まっているだけではなく)、強くぶつかった
+    // (重い設定だと、止まっていても1ステップ分の重力だけで hitN が大きくなり、ずっと「着地」になっていた)
+    if (vn0 > 40 && grounded && hitN > 60) { landT = hitN > 160 ? 10 : 6; }
 
     // 状態
     int32_t vt = vx * tdx + vy * tdy, vn = vx * gdx + vy * gdy;
@@ -356,6 +362,56 @@ struct HxcWorld {
   static int32_t abs32(int32_t v) { return v < 0 ? -v : v; }
   static int32_t clamp32(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : v > hi ? hi : v; }
 };
+
+// ---------------------------------------------------------------- .hxc (キャラのファイル、v0.11)
+//   STUDIO の「箱庭」で作って本体へ送る。リトルエンディアン、101 バイト
+//     0  'HXC1'
+//     4  u8 w, u8 h                 絵の幅・高さ (1〜16)
+//     6  u16 rows[16]               絵 (bit x が点、x=0 が左)
+//    38  i16 grav, i16 maxv, u8 bounce, u8 fric, i16 stick, i16 jump, u8 whim, u16 sleepAfter, i16 slosh   (15)
+//    53  u16 terrain[16]            地形 (bit x が壁)
+//    85  char name[16]              名前 (ASCII、0 埋め)
+static const int HXC_FILE_SIZE = 101;
+static inline uint16_t hxc_u16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static inline void hxc_w16(uint8_t* p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+/// 読む。形が違えば false (中身は変えない)
+static inline bool hxcParse(const uint8_t* b, uint32_t n, HxcSprite& sp, HxcParams& pr, uint16_t terrain[16], char name[17]) {
+  if (n < (uint32_t)HXC_FILE_SIZE || b[0] != 'H' || b[1] != 'X' || b[2] != 'C' || b[3] != '1') return false;
+  uint8_t w = b[4], h = b[5];
+  if (w < 1 || w > 16 || h < 1 || h > 16) return false;
+  HxcSprite s; s.w = w; s.h = h;
+  uint16_t mask = (uint16_t)((1u << w) - 1);
+  int dots = 0;
+  for (int y = 0; y < 16; y++) { s.rows[y] = y < h ? (uint16_t)(hxc_u16(b + 6 + y * 2) & mask) : 0; dots += __builtin_popcount(s.rows[y]); }
+  if (!dots) return false;
+  const uint8_t* q = b + 38;
+  HxcParams p;
+  p.grav = (int16_t)hxc_u16(q); p.maxv = (int16_t)hxc_u16(q + 2); p.bounce = q[4]; p.fric = q[5];
+  p.stick = (int16_t)hxc_u16(q + 6); p.jump = (int16_t)hxc_u16(q + 8); p.whim = q[10];
+  p.sleepAfter = hxc_u16(q + 11); p.slosh = (int16_t)hxc_u16(q + 13);
+  // 壊れた値で暴れないように丸める
+  if (p.grav < 1) p.grav = 1; if (p.grav > 400) p.grav = 400;
+  if (p.maxv < 16) p.maxv = 16; if (p.maxv > 255) p.maxv = 255;
+  if (p.jump < 0) p.jump = 0; if (p.jump > 600) p.jump = 600;
+  if (p.sleepAfter < 60) p.sleepAfter = 60;
+  sp = s; pr = p;
+  for (int y = 0; y < 16; y++) terrain[y] = hxc_u16(b + 53 + y * 2);
+  for (int i = 0; i < 16; i++) { char c = (char)b[85 + i]; name[i] = (c >= 0x20 && c < 0x7F) ? c : 0; if (!c) break; }
+  name[16] = 0;
+  return true;
+}
+/// 書く (PC のテスト・組み込みキャラの書き出し用)
+static inline void hxcBake(uint8_t* b, const HxcSprite& sp, const HxcParams& p, const uint16_t terrain[16], const char* name) {
+  memset(b, 0, HXC_FILE_SIZE);
+  b[0] = 'H'; b[1] = 'X'; b[2] = 'C'; b[3] = '1'; b[4] = sp.w; b[5] = sp.h;
+  for (int y = 0; y < 16; y++) hxc_w16(b + 6 + y * 2, sp.rows[y]);
+  uint8_t* q = b + 38;
+  hxc_w16(q, (uint16_t)p.grav); hxc_w16(q + 2, (uint16_t)p.maxv); q[4] = p.bounce; q[5] = p.fric;
+  hxc_w16(q + 6, (uint16_t)p.stick); hxc_w16(q + 8, (uint16_t)p.jump); q[10] = p.whim;
+  hxc_w16(q + 11, p.sleepAfter); hxc_w16(q + 13, (uint16_t)p.slosh);
+  for (int y = 0; y < 16; y++) hxc_w16(b + 53 + y * 2, terrain ? terrain[y] : 0);
+  for (int i = 0; name && name[i] && i < 16; i++) b[85 + i] = (uint8_t)name[i];
+}
 
 // 眠る前に RTC メモリへ memcpy で丸ごと写すので、ポインタや仮想関数を持たせないこと
 static_assert(std::is_trivially_copyable<HxcWorld>::value, "HxcWorld must be trivially copyable");

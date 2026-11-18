@@ -31,7 +31,7 @@ function errText(e){
     "open failed":"ファイルを作れません","write failed":"書き込めません","rename failed":"名前を付けられません",
     "not found":"見つかりません","upload timeout":"途中で止まりました",
     "busy":"本体が別の受け取りの最中です (CPZ から Wi-Fi で送っていませんか)。少し待ってもう一度",
-    "auth":"本体の合言葉が必要です (Wi-Fi)","no memory":"本体のメモリが足りません","bad clip":"コマ列の形が違います",
+    "auth":"本体の合言葉が必要です (Wi-Fi)","bad char":"キャラのファイルの形が違います","no memory":"本体のメモリが足りません","bad clip":"コマ列の形が違います",
     "unknown type":"本体のファームが古いです。v0.3.0 以上を書き込んでください"})[e]||e||"エラー";
 }
 /// 返事が送信より先に届いても取りこぼさないよう、待ちを先に登録してから送る
@@ -61,7 +61,7 @@ function xferFile(name,data,onProgress){
       }
       while(pend.length) await pend.shift();
     }finally{ pend.length=0; }
-    return await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined||typeof j.clip==="number",8000);
+    return await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined||j.char!==undefined||typeof j.clip==="number",8000);
     // ↑ PING の返事の clip は true/false、END の返事はコマ数 (数) なので数だけ見る
   };
   const p=xferChain.then(run,run);

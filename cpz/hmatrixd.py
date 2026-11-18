@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -413,7 +413,7 @@ class Link:
             step = "終わり"
             return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
                                 # PING の返事にも "clip" (true/false) があるので、コマ数 (int) の時だけ
-                                lambda j: "saved" in j or type(j.get("clip")) is int, tmo + 4)
+                                lambda j: "saved" in j or "char" in j or type(j.get("clip")) is int, tmo + 4)
         except RuntimeError as e:
             raise DevError(f"{e} ({step}, 窓{win})", getattr(e, "code", None)) from None
 
@@ -432,6 +432,7 @@ ERR_TEXT = {"no storage": "保存先がありません", "bad name": "ファイ�
             "rename failed": "名前を付けられません", "not found": "見つかりません",
             "upload timeout": "途中で止まりました", "no memory": "本体のメモリが足りません",
             "bad clip": "コマ列の形が違います",
+            "bad char": "キャラのファイルの形が違います (STUDIO の箱庭で作り直してください)",
             "bad config": "本体の設定を変えられません (ファームが古いか、立てて置いていないかもしれません)",
             "usb only": "この設定は USB でつないでいる時だけ変えられます",
             "busy": "本体が別の受け取りの最中です (USB と Wi-Fi の両方から送っていませんか)",

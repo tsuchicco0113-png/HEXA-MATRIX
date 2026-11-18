@@ -35,5 +35,13 @@ int main(){
   // 乱暴に揺らしても箱からはみ出さない・点の数は変わりすぎない
   { HxcWorld a=mk(5); srand(11); double ang=0; for(int i=0;i<20000;i++){ ang+= (rand()%200-100)/1000.0; HxcIn in; in.gx=(int)(1000*sin(ang))+rand()%600-300; in.gy=(int)(1000*cos(ang))+rand()%600-300; in.ev=(rand()%400==0)?HXC_TAP:(rand()%900==0)?HXC_SHAKE:0; a.step(in);
       int x=a.x>>8,y=a.y>>8; assert(x>=0&&y>=0&&x+a.bw()<=16&&y+a.bh()<=16); int n=lit(a); assert(n>=90&&n<=125); } puts("fuzz ok"); }
+  // 重い設定でも、止まっている時に「着地」のまま固まらない
+  { HxcWorld a=mk(); a.pr.grav=120; a.pr.bounce=0; a.pr.whim=0; int land=0; for(int i=0;i<300;i++){ HxcIn in; in.gy=1000; a.step(in); if(i>60) land+=a.st==HXC_LAND; } assert(land==0); puts("heavy ok"); }
+  // .hxc: 書いて読むと同じ。壊れた物は読まない
+  { HxcSprite s; s.parse(HXC_BUILTIN,HXC_BUILTIN_H); HxcParams p; p.grav=31; p.whim=7; p.sleepAfter=999; uint16_t t[16]={0}; t[3]=0x00F0;
+    uint8_t b[HXC_FILE_SIZE]; hxcBake(b,s,p,t,"gomaebi"); HxcSprite s2; HxcParams p2; uint16_t t2[16]; char nm[17];
+    assert(hxcParse(b,sizeof b,s2,p2,t2,nm)); assert(s2.w==14&&s2.h==10&&!memcmp(s2.rows,s.rows,sizeof s.rows)); assert(p2.grav==31&&p2.whim==7&&p2.sleepAfter==999&&p2.jump==p.jump);
+    assert(t2[3]==0x00F0 && !strcmp(nm,"gomaebi"));
+    b[0]='X'; assert(!hxcParse(b,sizeof b,s2,p2,t2,nm)); b[0]='H'; b[4]=0; assert(!hxcParse(b,sizeof b,s2,p2,t2,nm)); assert(!hxcParse(b,50,s2,p2,t2,nm)); puts("hxc ok"); }
   puts("char ok");
 }

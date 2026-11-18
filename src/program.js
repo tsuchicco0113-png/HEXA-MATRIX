@@ -404,10 +404,11 @@ let curView="mark";
 function setView(v){
   curView=v;
   document.querySelectorAll(".vtabs button").forEach(b=>b.classList.toggle("sel",b.dataset.v===v));
-  $("vMark").hidden = v!=="mark"; $("vProg").hidden = v!=="prog";
+  $("vMark").hidden = v!=="mark"; $("vProg").hidden = v!=="prog"; if($("vHako")) $("vHako").hidden = v!=="hako";
   document.querySelectorAll(".markOnly").forEach(e=>e.style.display = v==="mark"?"":"none");
   if(v==="prog"){ libOptions(); formFill(); previewSelected(); }
-  else{ stopPlay(); if(writer && $("live").checked) queueFrame(grid); }
+  else{ stopPlay(); if(v==="mark" && writer && $("live").checked) queueFrame(grid); }
+  if(typeof hakoShow==="function") hakoShow(v==="hako");
   try{ history.replaceState(null,"","#"+v); }catch(e){}
 }
 document.querySelectorAll(".vtabs button").forEach(b=>b.onclick=()=>setView(b.dataset.v));
@@ -421,6 +422,6 @@ async function progInit(){
     catch(e){ $("fontErr").style.display="block"; $("fontErr").textContent="フォントを読めませんでした: "+e.message; }
   }
   sceneRender(); formFill();
-  setView(location.hash==="#prog"?"prog":"mark");
+  setView(location.hash==="#prog"?"prog":location.hash==="#hako"?"hako":"mark");
   if(!fontsOK && curView==="prog") status("文字のシーンは再生できません","err");
 }

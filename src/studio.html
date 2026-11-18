@@ -78,6 +78,11 @@
   .scene{display:flex; align-items:center; gap:10px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--bg)}
   .scene:hover{border-color:var(--dim)} .scene.sel{border-color:var(--acc)}
   .scene canvas{width:40px; height:40px; border-radius:5px; flex:0 0 auto}
+  /* 箱庭 (v0.11) */
+  #hkpv{width:min(400px,calc(100vw - 58px)); aspect-ratio:1; background:#06080b; border:1px solid var(--border); border-radius:12px; display:block; touch-action:none; cursor:grab}
+  #hkEd{width:min(320px,calc(100vw - 90px)); aspect-ratio:1; background:#000; border:1px solid var(--border); border-radius:10px; display:block; touch-action:none; cursor:crosshair}
+  .hkrow{display:grid; grid-template-columns:7.5em 1fr 3.2em; align-items:center; gap:8px; margin-bottom:4px}
+  .hkrow .h{font-size:11px; color:var(--dim)} .hkrow .v{font-size:11px; text-align:right}
   .stxt{flex:1; min-width:0; display:flex; flex-direction:column; gap:2px}
   .stxt b{font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600}
   .stxt span{font-size:11px; color:var(--dim)}
@@ -158,6 +163,7 @@
   <nav class="vtabs">
     <button data-v="mark" class="sel">マークを作る</button>
     <button data-v="prog">番組を作る</button>
+    <button data-v="hako">箱庭 (キャラ)</button>
   </nav>
       <div class="panel connp">
         <h2>CoreMatrix へ送る (USB)</h2>
@@ -405,6 +411,70 @@
         <div id="devProg" style="display:none"><div id="devBar"></div></div>
         <div class="hint">本体は名前の順に番組を並べ、A/C で切り替えます。名前に使えるのは英数字と _ - だけです。<br>
           「実機にも流す」がオンの間はプレビューが優先され、止めて3秒たつと本体の番組に戻ります。</div>
+      </div>
+    </div>
+  </div>
+  </section>
+
+  <section id="vHako" hidden>
+  <div class="cols">
+    <div class="panel stage">
+      <canvas id="hkpv" width="420" height="420"></canvas>
+      <div class="lbl" id="hkInfo" style="margin-top:6px">-</div>
+      <div class="grp" style="margin-top:8px"><span class="g">傾ける</span>
+        <button id="hkL90" title="左へ90°">⟲ 90°</button><button id="hkR90" title="右へ90°">⟳ 90°</button>
+        <button id="hk180">逆さま</button><button id="hk0">吊るす (まっすぐ)</button>
+        <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="hkSwing"> ゆらゆら</label>
+      </div>
+      <div class="grp"><span class="g">さわる</span>
+        <button id="hkTap">トンと叩く</button><button id="hkShake">振る</button><button id="hkPet">なでる (A)</button><button id="hkPoke">つつく (C)</button>
+        <button id="hkSleep" title="静かにしている時間を進めて寝かせる">寝かせる</button>
+      </div>
+      <div class="grp"><button id="hkPhone">スマホの傾きで動かす</button><span class="lbl" id="hkPhoneSt"></span></div>
+      <div class="hint">画面を左右にドラッグすると本体を回せます (オレンジの印が吊り穴)。<br>
+        <b>実機で試す</b>は保存せずに本体で動かします (止めるまで箱庭のまま。試している間は、変えるたびに送り直します)。<br>
+        <b>本体に保存</b>すると、USB を抜いた時の箱庭のキャラになります。ファーム v0.11 以上。</div>
+      <div class="grp" style="margin-top:8px">
+        <button id="hkTry" class="primary" disabled>実機で試す</button>
+        <button id="hkStop" disabled>試すのをやめる</button>
+        <button id="hkSave" disabled>本体に保存</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>キャラの絵</h2>
+        <div class="grp">
+          <button id="hkModeC" class="sel">キャラを描く</button><button id="hkModeT">地形を描く</button>
+        </div>
+        <canvas id="hkEd" width="320" height="320"></canvas>
+        <div class="grp" style="margin-top:8px">
+          <button id="hkBuiltin">組み込みのキャラ</button><button id="hkFromMark" title="「マークを作る」でいま描いている絵を使う">マークの絵を使う</button>
+          <button id="hkFlip">左右反転</button><button id="hkClear" class="warn">消す</button>
+        </div>
+        <div class="lbl" id="hkFound">-</div>
+        <div class="hint">絵は描いた所だけが使われます (余白は自動で詰めます)。<br>
+          <b>目</b> = 体の上半分にある、上下左右を体に囲まれた1マスの穴 (2つまで)。<b>脚</b> = いちばん下の行の点のかたまり。<br>
+          見つけた目と脚から、まばたき・目線・歩く脚・着地でつぶれる・寝る・目が回る を自動で作ります。<br>
+          地形は壁・足場になります (キャラの絵とは別)。</div>
+      </div>
+
+      <div class="panel">
+        <h2>性格</h2>
+        <div id="hkParams"></div>
+        <div class="grp" style="margin-top:6px"><button id="hkDefault">ふつうに戻す</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>名前とファイル</h2>
+        <div class="grp">
+          <input type="text" id="hkName" maxlength="16" placeholder="英数字 16字まで" style="flex:1 1 140px" aria-label="キャラの名前">
+        </div>
+        <div class="grp">
+          <button id="hkExport">.hxc を書き出す</button><button id="hkImport">.hxc を読み込む</button>
+          <input type="file" id="hkFile" accept=".hxc" hidden>
+        </div>
+        <div class="hint">.hxc を microSD の hexa フォルダに hako.hxc という名前で置いても使えます。</div>
       </div>
     </div>
   </div>
@@ -740,7 +810,7 @@ function onLine(ln){
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
   }
-  if(j.ack!==undefined || j.saved!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
+  if(j.ack!==undefined || j.saved!==undefined || j.char!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
   if(j.list){ devList=j; devRender(); return; }
   if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
   if(j.bench_us!==undefined){ log("速度計測: 1コマ "+(j.bench_us/1000).toFixed(1)+"ms (最大 約"+j.fps_max+"コマ/秒)","ok"); return; }
@@ -1076,6 +1146,8 @@ $("png").onclick=()=>{
 /*@@PROGRAM@@*/
 /*@@ANIM@@*/
 /*@@DEVICE@@*/
+/*@@HAKOENGINE@@*/
+/*@@HAKO@@*/
 libLoad(); libRender(); render(); stripRender(); push();
 progInit();
 </script>

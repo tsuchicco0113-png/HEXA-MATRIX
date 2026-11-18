@@ -15,7 +15,7 @@ static inline uint32_t hxm_crc32(uint32_t crc, const uint8_t* p, uint32_t n) {
 static inline uint32_t hxm_u32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 static inline uint16_t hxm_u16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
-/// ファイル名を「英数字 _ - .」だけにし、.hxm で終わらせる。使えなければ false
+/// ファイル名を「英数字 _ - .」だけにし、.hxm で終わらせる (.hxc はそのまま)。使えなければ false
 static inline bool hxm_safe_name(const uint8_t* src, uint8_t n, char* out, size_t cap) {
   size_t k = 0;
   for (uint8_t i = 0; i < n && k + 1 < cap; i++) {
@@ -26,6 +26,7 @@ static inline bool hxm_safe_name(const uint8_t* src, uint8_t n, char* out, size_
   out[k] = 0;
   while (k && out[0] == '.') { memmove(out, out + 1, k); k--; }   // 隠しファイルにしない
   if (k == 0) return false;
+  if (k >= 4 && strcmp(out + k - 4, ".hxc") == 0) return true;   // 箱庭のキャラ (v0.11) はそのまま
   if (k < 4 || strcmp(out + k - 4, ".hxm") != 0) {
     if (k + 4 >= cap) return false;
     strcpy(out + k, ".hxm");

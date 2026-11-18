@@ -78,6 +78,11 @@
   .scene{display:flex; align-items:center; gap:10px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--bg)}
   .scene:hover{border-color:var(--dim)} .scene.sel{border-color:var(--acc)}
   .scene canvas{width:40px; height:40px; border-radius:5px; flex:0 0 auto}
+  /* 箱庭 (v0.11) */
+  #hkpv{width:min(400px,calc(100vw - 58px)); aspect-ratio:1; background:#06080b; border:1px solid var(--border); border-radius:12px; display:block; touch-action:none; cursor:grab}
+  #hkEd{width:min(320px,calc(100vw - 90px)); aspect-ratio:1; background:#000; border:1px solid var(--border); border-radius:10px; display:block; touch-action:none; cursor:crosshair}
+  .hkrow{display:grid; grid-template-columns:7.5em 1fr 3.2em; align-items:center; gap:8px; margin-bottom:4px}
+  .hkrow .h{font-size:11px; color:var(--dim)} .hkrow .v{font-size:11px; text-align:right}
   .stxt{flex:1; min-width:0; display:flex; flex-direction:column; gap:2px}
   .stxt b{font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:600}
   .stxt span{font-size:11px; color:var(--dim)}
@@ -158,6 +163,7 @@
   <nav class="vtabs">
     <button data-v="mark" class="sel">マークを作る</button>
     <button data-v="prog">番組を作る</button>
+    <button data-v="hako">箱庭 (キャラ)</button>
   </nav>
       <div class="panel connp">
         <h2>CoreMatrix へ送る (USB)</h2>
@@ -405,6 +411,70 @@
         <div id="devProg" style="display:none"><div id="devBar"></div></div>
         <div class="hint">本体は名前の順に番組を並べ、A/C で切り替えます。名前に使えるのは英数字と _ - だけです。<br>
           「実機にも流す」がオンの間はプレビューが優先され、止めて3秒たつと本体の番組に戻ります。</div>
+      </div>
+    </div>
+  </div>
+  </section>
+
+  <section id="vHako" hidden>
+  <div class="cols">
+    <div class="panel stage">
+      <canvas id="hkpv" width="420" height="420"></canvas>
+      <div class="lbl" id="hkInfo" style="margin-top:6px">-</div>
+      <div class="grp" style="margin-top:8px"><span class="g">傾ける</span>
+        <button id="hkL90" title="左へ90°">⟲ 90°</button><button id="hkR90" title="右へ90°">⟳ 90°</button>
+        <button id="hk180">逆さま</button><button id="hk0">吊るす (まっすぐ)</button>
+        <label class="lbl" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="hkSwing"> ゆらゆら</label>
+      </div>
+      <div class="grp"><span class="g">さわる</span>
+        <button id="hkTap">トンと叩く</button><button id="hkShake">振る</button><button id="hkPet">なでる (A)</button><button id="hkPoke">つつく (C)</button>
+        <button id="hkSleep" title="静かにしている時間を進めて寝かせる">寝かせる</button>
+      </div>
+      <div class="grp"><button id="hkPhone">スマホの傾きで動かす</button><span class="lbl" id="hkPhoneSt"></span></div>
+      <div class="hint">画面を左右にドラッグすると本体を回せます (オレンジの印が吊り穴)。<br>
+        <b>実機で試す</b>は保存せずに本体で動かします (止めるまで箱庭のまま。試している間は、変えるたびに送り直します)。<br>
+        <b>本体に保存</b>すると、USB を抜いた時の箱庭のキャラになります。ファーム v0.11 以上。</div>
+      <div class="grp" style="margin-top:8px">
+        <button id="hkTry" class="primary" disabled>実機で試す</button>
+        <button id="hkStop" disabled>試すのをやめる</button>
+        <button id="hkSave" disabled>本体に保存</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>キャラの絵</h2>
+        <div class="grp">
+          <button id="hkModeC" class="sel">キャラを描く</button><button id="hkModeT">地形を描く</button>
+        </div>
+        <canvas id="hkEd" width="320" height="320"></canvas>
+        <div class="grp" style="margin-top:8px">
+          <button id="hkBuiltin">組み込みのキャラ</button><button id="hkFromMark" title="「マークを作る」でいま描いている絵を使う">マークの絵を使う</button>
+          <button id="hkFlip">左右反転</button><button id="hkClear" class="warn">消す</button>
+        </div>
+        <div class="lbl" id="hkFound">-</div>
+        <div class="hint">絵は描いた所だけが使われます (余白は自動で詰めます)。<br>
+          <b>目</b> = 体の上半分にある、上下左右を体に囲まれた1マスの穴 (2つまで)。<b>脚</b> = いちばん下の行の点のかたまり。<br>
+          見つけた目と脚から、まばたき・目線・歩く脚・着地でつぶれる・寝る・目が回る を自動で作ります。<br>
+          地形は壁・足場になります (キャラの絵とは別)。</div>
+      </div>
+
+      <div class="panel">
+        <h2>性格</h2>
+        <div id="hkParams"></div>
+        <div class="grp" style="margin-top:6px"><button id="hkDefault">ふつうに戻す</button></div>
+      </div>
+
+      <div class="panel">
+        <h2>名前とファイル</h2>
+        <div class="grp">
+          <input type="text" id="hkName" maxlength="16" placeholder="英数字 16字まで" style="flex:1 1 140px" aria-label="キャラの名前">
+        </div>
+        <div class="grp">
+          <button id="hkExport">.hxc を書き出す</button><button id="hkImport">.hxc を読み込む</button>
+          <input type="file" id="hkFile" accept=".hxc" hidden>
+        </div>
+        <div class="hint">.hxc を microSD の hexa フォルダに hako.hxc という名前で置いても使えます。</div>
       </div>
     </div>
   </div>
@@ -740,7 +810,7 @@ function onLine(ln){
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
   }
-  if(j.ack!==undefined || j.saved!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
+  if(j.ack!==undefined || j.saved!==undefined || j.char!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
   if(j.list){ devList=j; devRender(); return; }
   if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
   if(j.bench_us!==undefined){ log("速度計測: 1コマ "+(j.bench_us/1000).toFixed(1)+"ms (最大 約"+j.fps_max+"コマ/秒)","ok"); return; }
@@ -1757,10 +1827,11 @@ let curView="mark";
 function setView(v){
   curView=v;
   document.querySelectorAll(".vtabs button").forEach(b=>b.classList.toggle("sel",b.dataset.v===v));
-  $("vMark").hidden = v!=="mark"; $("vProg").hidden = v!=="prog";
+  $("vMark").hidden = v!=="mark"; $("vProg").hidden = v!=="prog"; if($("vHako")) $("vHako").hidden = v!=="hako";
   document.querySelectorAll(".markOnly").forEach(e=>e.style.display = v==="mark"?"":"none");
   if(v==="prog"){ libOptions(); formFill(); previewSelected(); }
-  else{ stopPlay(); if(writer && $("live").checked) queueFrame(grid); }
+  else{ stopPlay(); if(v==="mark" && writer && $("live").checked) queueFrame(grid); }
+  if(typeof hakoShow==="function") hakoShow(v==="hako");
   try{ history.replaceState(null,"","#"+v); }catch(e){}
 }
 document.querySelectorAll(".vtabs button").forEach(b=>b.onclick=()=>setView(b.dataset.v));
@@ -1774,7 +1845,7 @@ async function progInit(){
     catch(e){ $("fontErr").style.display="block"; $("fontErr").textContent="フォントを読めませんでした: "+e.message; }
   }
   sceneRender(); formFill();
-  setView(location.hash==="#prog"?"prog":"mark");
+  setView(location.hash==="#prog"?"prog":location.hash==="#hako"?"hako":"mark");
   if(!fontsOK && curView==="prog") status("文字のシーンは再生できません","err");
 }
 
@@ -2032,7 +2103,7 @@ function errText(e){
     "open failed":"ファイルを作れません","write failed":"書き込めません","rename failed":"名前を付けられません",
     "not found":"見つかりません","upload timeout":"途中で止まりました",
     "busy":"本体が別の受け取りの最中です (CPZ から Wi-Fi で送っていませんか)。少し待ってもう一度",
-    "auth":"本体の合言葉が必要です (Wi-Fi)","no memory":"本体のメモリが足りません","bad clip":"コマ列の形が違います",
+    "auth":"本体の合言葉が必要です (Wi-Fi)","bad char":"キャラのファイルの形が違います","no memory":"本体のメモリが足りません","bad clip":"コマ列の形が違います",
     "unknown type":"本体のファームが古いです。v0.3.0 以上を書き込んでください"})[e]||e||"エラー";
 }
 /// 返事が送信より先に届いても取りこぼさないよう、待ちを先に登録してから送る
@@ -2062,7 +2133,7 @@ function xferFile(name,data,onProgress){
       }
       while(pend.length) await pend.shift();
     }finally{ pend.length=0; }
-    return await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined||typeof j.clip==="number",8000);
+    return await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined||j.char!==undefined||typeof j.clip==="number",8000);
     // ↑ PING の返事の clip は true/false、END の返事はコマ数 (数) なので数だけ見る
   };
   const p=xferChain.then(run,run);
@@ -2128,6 +2199,500 @@ $("devSave").onclick=()=>devDo(async()=>{
   $("devName").value=suggestName();
   setTimeout(()=>{ $("devProg").style.display="none"; },1500);
 });
+
+// ============================================================
+// 箱庭エンジン (JS 版)。firmware/HexaMatrixFW/hxm_char.h と同じ動きをする (同じ入力なら同じコマ)
+//   ・C の整数の割り算 (0 に向かって切り捨て) は idiv()、uint8/uint16 のあふれは & で合わせる
+//   ・変えたら tests/hako_parity.js で C++ と一致するか確かめる
+// ============================================================
+const HXC={TAP:1,SHAKE:2,PET:4,POKE:8,
+  IDLE:0,WALK:1,AIR:2,LAND:3,DIZZY:4,SLEEP:5,WAKE:6,HAPPY:7,
+  ST_NAME:["待機","歩く","空中","着地","目が回る","寝る","起きた","うれしい"]};
+const HXC_DEFAULT={grav:26,maxv:170,bounce:80,fric:36,stick:140,jump:235,whim:120,sleepAfter:60*25,slosh:0};
+const HXC_BUILTIN_ROWS=[
+  "..##########..",
+  ".############.",
+  ".##.#########.",
+  "##########.###",
+  "##############",
+  ".#############",
+  ".############.",
+  ".##.##..##.##.",
+  ".##.##..##.##.",
+  "..#.##..##.##."];
+function idiv(a,b){ return Math.trunc(a/b); }
+function hxcSpriteFromLines(lines){
+  const rows=new Array(16).fill(0); let w=0; const h=Math.min(16,lines.length);
+  for(let y=0;y<h;y++) for(let x=0;x<lines[y].length&&x<16;x++){ if(lines[y][x]==="#"||lines[y][x]==="1") rows[y]|=(1<<x); if(x+1>w) w=x+1; }
+  return {w:w,h:h,rows:rows};
+}
+function hxcSprPx(s,x,y){ return x>=0&&y>=0&&x<s.w&&y<s.h&&((s.rows[y]>>x)&1)===1; }
+function hxcSprSet(s,x,y,on){ if(x>=0&&y>=0&&x<16&&y<16){ if(on) s.rows[y]|=(1<<x); else s.rows[y]&=~(1<<x); s.rows[y]&=0xFFFF; } }
+function hxcSprCopy(s){ return {w:s.w,h:s.h,rows:s.rows.slice()}; }
+
+class HxcWorld{
+  constructor(){ this.terrain=new Array(16).fill(0); this.sp={w:0,h:0,rows:new Array(16).fill(0)}; this.pr=Object.assign({},HXC_DEFAULT);
+    this.x=0;this.y=0;this.vx=0;this.vy=0;this.q=0;this.qCand=0;this.qT=0;this.st=HXC.IDLE;this.stT=0;this.still=0;this.blinkT=0;this.whimT=0;
+    this.lookX=0;this.lookY=0;this.face=1;this.walkPh=0;this.walkT=0;this.dizzyT=0;this.landT=0;this.wakeT=0;this.happyT=0;this.grounded=false;
+    this.lgx=0;this.lgy=1000;this.lgz=0;this.lastWz=0;this.rng=1;this.ticks=0;this.eyeX=[-1,-1];this.eyeY=[-1,-1];this.legN=0;this.legX0=[0,0,0,0,0,0];this.legX1=[0,0,0,0,0,0];this.midRow=0; }
+  init(s,p,seed){
+    this.sp=hxcSprCopy(s); this.pr=Object.assign({},HXC_DEFAULT,p); this.rng=(seed>>>0)||1;
+    this.analyze();
+    this.q=this.qCand=0; this.qT=0;
+    this.x=idiv((16-this.sp.w)<<8,2); this.y=(16-this.sp.h)<<8; this.vx=this.vy=0;
+    this.st=HXC.IDLE; this.stT=this.still=0; this.blinkT=(120+this.rnd(180))&0xFFFF; this.whimT=(240+this.rnd(240))&0xFFFF;
+    this.face=1; this.ticks=0;
+  }
+  analyze(){
+    const sp=this.sp; let ne=0;
+    this.eyeX=[-1,-1]; this.eyeY=[-1,-1];
+    for(let yy=1;yy<sp.h-1&&ne<2;yy++)
+      for(let xx=1;xx<sp.w-1&&ne<2;xx++)
+        if(!hxcSprPx(sp,xx,yy)&&hxcSprPx(sp,xx-1,yy)&&hxcSprPx(sp,xx+1,yy)&&hxcSprPx(sp,xx,yy-1)&&hxcSprPx(sp,xx,yy+1)){
+          if(yy<idiv(sp.h,2)+1){ this.eyeX[ne]=xx; this.eyeY[ne]=yy; ne++; }
+        }
+    this.legN=0; const last=sp.h-1;
+    for(let xx=0;xx<sp.w&&this.legN<6;){
+      if(hxcSprPx(sp,xx,last)){ const x0=xx; while(xx<sp.w&&hxcSprPx(sp,xx,last)) xx++; this.legX0[this.legN]=x0; this.legX1[this.legN]=xx-1; this.legN++; }
+      else xx++;
+    }
+    let legTop=last;
+    while(legTop>0&&sp.rows[legTop-1]===sp.rows[last]) legTop--;
+    this.midRow=legTop>2?idiv(legTop,2):idiv(sp.h,2);
+  }
+  rnd(n){ let r=this.rng>>>0; r=(r^(r<<13))>>>0; r=(r^(r>>>17))>>>0; r=(r^(r<<5))>>>0; this.rng=r; return n?r%n:r; }
+  bw(){ return (this.q&1)?this.sp.h:this.sp.w; }
+  bh(){ return (this.q&1)?this.sp.w:this.sp.h; }
+  static gdir(q){ return [q===1?-1:q===3?1:0, q===0?1:q===2?-1:0]; }
+  static tdir(q){ return [q===0?1:q===2?-1:0, q===1?1:q===3?-1:0]; }
+  solid(px,py,w,h){
+    if(px<0||py<0||px+w>16||py+h>16) return true;
+    const m=(((1<<w)-1)<<px)&0xFFFF;
+    for(let yy=py;yy<py+h;yy++) if(this.terrain[yy]&m) return true;
+    return false;
+  }
+  moveAxis(isX){
+    const w=this.bw(), h=this.bh();
+    let p=isX?this.x:this.y, v=isX?this.vx:this.vy;
+    const np=p+v, from=p>>8, to=np>>8, step=to>from?1:-1;
+    for(let c=from;c!==to;c+=step){
+      const n=c+step;
+      if(isX?this.solid(n,this.y>>8,w,h):this.solid(this.x>>8,n,w,h)){
+        p=step>0?(c<<8)+255:(c<<8);
+        const hit=v<0?-v:v;
+        v=idiv(-(v*this.pr.bounce),256);
+        if((v<0?-v:v)<24) v=0;
+        if(isX){ this.x=p; this.vx=v; } else { this.y=p; this.vy=v; }
+        return hit;
+      }
+    }
+    p=np; if(p<0) p=0;
+    if(isX) this.x=p; else this.y=p;
+    return 0;
+  }
+  onFloor(){ const [dx,dy]=HxcWorld.gdir(this.q); return this.solid((this.x>>8)+dx,(this.y>>8)+dy,this.bw(),this.bh()); }
+  setQ(nq){
+    const cx=(this.x>>8)*2+this.bw(), cy=(this.y>>8)*2+this.bh();
+    this.q=nq;
+    let nx=idiv(cx-this.bw(),2), ny=idiv(cy-this.bh(),2);
+    if(nx<0) nx=0; if(ny<0) ny=0;
+    if(nx+this.bw()>16) nx=16-this.bw(); if(ny+this.bh()>16) ny=16-this.bh();
+    for(let k=0;k<16&&this.solid(nx,ny,this.bw(),this.bh());k++){ const [dx,dy]=HxcWorld.gdir(this.q); nx-=dx; ny-=dy; }
+    this.x=nx<<8; this.y=ny<<8; this.vx=this.vy=0;
+  }
+  enter(s){ if(this.st!==s){ this.st=s; this.stT=0; } }
+  step(inp){
+    const pr=this.pr, gx=inp.gx|0, gy=inp.gy|0, gz=inp.gz|0, wz=inp.wz|0, ev=inp.ev|0;
+    this.ticks=(this.ticks+1)>>>0;
+    const dmove=Math.abs(gx-this.lgx)+Math.abs(gy-this.lgy)+Math.abs(gz-this.lgz);
+    this.lgx+=idiv(gx-this.lgx,8); this.lgy+=idiv(gy-this.lgy,8); this.lgz+=idiv(gz-this.lgz,8);
+    const moving=dmove>90||ev!==0;
+    if(moving) this.still=0; else if(this.still<0xFFFF) this.still++;
+    const ax=gx, ay=gy, mag=Math.max(Math.abs(ax),Math.abs(ay));
+    let want=this.q;
+    if(mag>450){
+      if(Math.abs(ay)*10>Math.abs(ax)*13) want=ay>0?0:2;
+      else if(Math.abs(ax)*10>Math.abs(ay)*13) want=ax<0?1:3;
+    }
+    if(want!==this.q){ if(want===this.qCand){ this.qT=(this.qT+1)&0xFF; if(this.qT>=18){ this.setQ(want); this.qT=0; this.enter(HXC.AIR); } } else { this.qCand=want; this.qT=0; } }
+    else this.qT=0;
+    if(this.st===HXC.SLEEP){
+      if(moving){ this.enter(HXC.WAKE); this.wakeT=30; this.kick(idiv(-pr.jump*2,3),0); }
+      else { this.stT=(this.stT+1)&0xFFFF; this.animTick(); return; }
+    }
+    const [gdx,gdy]=HxcWorld.gdir(this.q), [tdx,tdy]=HxcWorld.tdir(this.q);
+    this.grounded=this.onFloor();
+    const vn0=this.vx*gdx+this.vy*gdy;              // 力を足す前の、床へ向かう速さ
+    let ax8=idiv(ax*pr.grav,1000), ay8=idiv(ay*pr.grav,1000);
+    if(pr.slosh){
+      const dw=wz-this.lastWz, rx=(this.x>>8)+idiv(this.bw(),2)-8, ry=(this.y>>8)+idiv(this.bh(),2)-8;
+      ax8+=idiv(pr.slosh*dw*ry,2048); ay8-=idiv(pr.slosh*dw*rx,2048);
+    }
+    this.lastWz=wz;
+    const at=ax8*tdx+ay8*tdy, aTmg=ax*tdx+ay*tdy;
+    if(this.grounded&&Math.abs(aTmg)<pr.stick){ ax8-=at*tdx; ay8-=at*tdy; }
+    this.vx+=ax8; this.vy+=ay8;
+    if(this.grounded){ const vt=this.vx*tdx+this.vy*tdy, dec=idiv(vt*pr.fric,256); this.vx-=dec*tdx; this.vy-=dec*tdy; }
+    else { this.vx-=idiv(this.vx,128); this.vy-=idiv(this.vy,128); }
+    this.vx=Math.max(-pr.maxv,Math.min(pr.maxv,this.vx)); this.vy=Math.max(-pr.maxv*2,Math.min(pr.maxv*2,this.vy));
+    if(ev&HXC.SHAKE){ this.dizzyT=120; this.enter(HXC.DIZZY); }
+    if((ev&(HXC.TAP|HXC.POKE))&&this.grounded) this.kick(-pr.jump,(this.rnd(3)|0)-1);
+    if(ev&HXC.PET){ this.happyT=40; if(this.grounded) this.kick(idiv(-pr.jump,2),0); }
+    if(this.grounded&&this.st!==HXC.DIZZY&&this.still>120&&pr.whim){
+      if(this.whimT) this.whimT--;
+      else {
+        const r=this.rnd(256);
+        if(r<idiv(pr.whim,2)){ const k=this.rnd(3), t=this.rnd(3); this.kick(idiv(-pr.jump*(2+k),5),t-1); }
+        else { this.lookX=this.rnd(3)-1; this.lookY=this.rnd(3)-1; }
+        this.whimT=(150+Math.floor(this.rnd(300)*(256-pr.whim)/128))&0xFFFF;
+      }
+    }
+    const hitX=this.moveAxis(true), hitY=this.moveAxis(false);
+    const hitN=gdx?hitX:hitY;
+    this.grounded=this.onFloor();
+    if(vn0>40&&this.grounded&&hitN>60) this.landT=hitN>160?10:6;   // 止まっているだけでは「着地」にしない
+    const vt=this.vx*tdx+this.vy*tdy;
+    if(Math.abs(vt)>20) this.face=vt>0?1:-1;
+    if(this.dizzyT){ this.dizzyT--; this.enter(HXC.DIZZY); }
+    else if(this.wakeT){ this.wakeT--; this.enter(HXC.WAKE); }
+    else if(this.landT){ this.landT--; this.enter(HXC.LAND); }
+    else if(!this.grounded) this.enter(HXC.AIR);
+    else if(this.happyT){ this.happyT--; this.enter(HXC.HAPPY); }
+    else if(Math.abs(vt)>18) this.enter(HXC.WALK);
+    else if(this.still>pr.sleepAfter) this.enter(HXC.SLEEP);
+    else this.enter(HXC.IDLE);
+    this.stT=(this.stT+1)&0xFFFF;
+    this.animTick();
+  }
+  kick(n,t){ const [gdx,gdy]=HxcWorld.gdir(this.q), [tdx,tdy]=HxcWorld.tdir(this.q); this.vx+=n*gdx+t*60*tdx; this.vy+=n*gdy+t*60*tdy; }
+  animTick(){
+    if(this.blinkT) this.blinkT--; else this.blinkT=(150+this.rnd(240))&0xFFFF;
+    if(this.st===HXC.WALK){ this.walkT=(this.walkT+1)&0xFF; if(this.walkT>=7){ this.walkT=0; this.walkPh^=1; } }
+    else this.walkPh=0;
+    if(this.st!==HXC.IDLE&&this.st!==HXC.SLEEP){
+      const [tdx,tdy]=HxcWorld.tdir(this.q), [gdx,gdy]=HxcWorld.gdir(this.q);
+      const vt=this.vx*tdx+this.vy*tdy, vn=this.vx*gdx+this.vy*gdy;
+      this.lookX=vt>30?1:vt< -30?-1:0; this.lookY=vn>40?1:vn< -40?-1:0;
+    }
+  }
+  pose(){
+    const sp=this.sp, o=hxcSprCopy(sp); let dh=0, sway=0, closed=false, ex=this.lookX, ey=this.lookY;
+    switch(this.st){
+      case HXC.LAND: dh=-1; break;
+      case HXC.AIR: { const [gdx,gdy]=HxcWorld.gdir(this.q); const vn=this.vx*gdx+this.vy*gdy; dh=vn< -90?1:0; break; }
+      case HXC.WAKE: dh=(idiv(this.stT,4)&1)?1:0; ey=-1; break;
+      case HXC.SLEEP: closed=true; dh=(idiv(this.stT,50)&1)?-1:0; ex=ey=0; break;
+      case HXC.DIZZY: ex=(idiv(this.ticks,5)%3)-1; ey=(idiv(this.ticks,7)%3)-1; sway=(idiv(this.ticks,6)&1)?1:-1; break;
+      case HXC.HAPPY: closed=(idiv(this.stT,6)&1)===1; break;
+    }
+    if(this.st===HXC.IDLE&&this.blinkT<7) closed=true;
+    for(let i=0;i<2;i++){ if(this.eyeX[i]<0) continue; hxcSprSet(o,this.eyeX[i],this.eyeY[i],true); }
+    if(!closed) for(let i=0;i<2;i++){
+      if(this.eyeX[i]<0) continue;
+      let nx=this.eyeX[i]+ex*this.face, ny=this.eyeY[i]+ey;
+      const ok=hxcSprPx(sp,nx-1,ny)&&hxcSprPx(sp,nx+1,ny)&&hxcSprPx(sp,nx,ny-1)&&hxcSprPx(sp,nx,ny+1)&&hxcSprPx(sp,nx,ny);
+      if(!ok){ nx=this.eyeX[i]; ny=this.eyeY[i]; }
+      hxcSprSet(o,nx,ny,false);
+    }
+    if(this.st===HXC.WALK) for(let k=0;k<this.legN;k++) if((k&1)===this.walkPh) for(let xx=this.legX0[k];xx<=this.legX1[k];xx++) hxcSprSet(o,xx,sp.h-1,false);
+    if(dh){
+      const t=o.rows.slice(); let j=0; o.rows=new Array(16).fill(0);
+      for(let yy=0;yy<sp.h;yy++){
+        if(dh<0&&yy===this.midRow) continue;
+        if(j<16) o.rows[j++]=t[yy];
+        if(dh>0&&yy===this.midRow&&j<16) o.rows[j++]=t[yy];
+      }
+      o.h=j;
+    }
+    return {o:o,dh:dh,sway:sway};
+  }
+  /// 16×16 のコマ (Uint8Array(32)、ファームと同じ並び)
+  render(){
+    const out=new Uint8Array(32);
+    const dot=(px,py)=>{ if(px<0||py<0||px>15||py>15) return; out[py*2+(px>>3)]|=(0x80>>(px&7)); };
+    for(let yy=0;yy<16;yy++) for(let xx=0;xx<16;xx++) if((this.terrain[yy]>>xx)&1) dot(xx,yy);
+    const {o,dh,sway}=this.pose(); const bx=this.x>>8, by=this.y>>8, w=this.sp.w, h=this.sp.h; const [tdx,tdy]=HxcWorld.tdir(this.q);
+    for(let v=0;v<o.h;v++) for(let u=0;u<o.w;u++){
+      if(!hxcSprPx(o,u,v)) continue;
+      const uu=this.face<0?w-1-u:u, vb=v-dh; let sx,sy;
+      switch(this.q){ case 0: sx=uu; sy=vb; break; case 2: sx=w-1-uu; sy=h-1-vb; break; case 1: sx=h-1-vb; sy=uu; break; default: sx=vb; sy=w-1-uu; }
+      dot(bx+sx+sway*tdx, by+sy+sway*tdy);
+    }
+    return out;
+  }
+  sleeping(){ return this.st===HXC.SLEEP; }
+}
+
+// ---- .hxc (101 バイト、hxm_char.h の hxcParse / hxcBake と同じ)
+const HXC_FILE_SIZE=101;
+function hxcBake(sp,p,terrain,name){
+  const b=new Uint8Array(HXC_FILE_SIZE), w16=(o,v)=>{ b[o]=v&255; b[o+1]=(v>>8)&255; };
+  b.set([72,88,67,49],0); b[4]=sp.w; b[5]=sp.h;
+  for(let y=0;y<16;y++) w16(6+y*2,sp.rows[y]||0);
+  const q=38; w16(q,p.grav); w16(q+2,p.maxv); b[q+4]=p.bounce&255; b[q+5]=p.fric&255; w16(q+6,p.stick); w16(q+8,p.jump); b[q+10]=p.whim&255; w16(q+11,p.sleepAfter); w16(q+13,p.slosh);
+  for(let y=0;y<16;y++) w16(53+y*2,(terrain&&terrain[y])||0);
+  const nm=String(name||"").replace(/[^\x20-\x7e]/g,"").slice(0,16);
+  for(let i=0;i<nm.length;i++) b[85+i]=nm.charCodeAt(i);
+  return b;
+}
+function hxcParse(b){
+  if(!b||b.length<HXC_FILE_SIZE||b[0]!==72||b[1]!==88||b[2]!==67||b[3]!==49) return null;
+  const w=b[4], h=b[5]; if(w<1||w>16||h<1||h>16) return null;
+  const u16=o=>b[o]|(b[o+1]<<8), s16=o=>{ const v=u16(o); return v>=32768?v-65536:v; };
+  const mask=(1<<w)-1, rows=[]; let dots=0;
+  for(let y=0;y<16;y++){ const r=y<h?(u16(6+y*2)&mask):0; rows.push(r); for(let k=r;k;k&=k-1) dots++; }
+  if(!dots) return null;
+  const q=38, p={grav:s16(q),maxv:s16(q+2),bounce:b[q+4],fric:b[q+5],stick:s16(q+6),jump:s16(q+8),whim:b[q+10],sleepAfter:u16(q+11),slosh:s16(q+13)};
+  p.grav=Math.max(1,Math.min(400,p.grav)); p.maxv=Math.max(16,Math.min(255,p.maxv)); p.jump=Math.max(0,Math.min(600,p.jump)); p.sleepAfter=Math.max(60,p.sleepAfter);
+  const terrain=[]; for(let y=0;y<16;y++) terrain.push(u16(53+y*2));
+  let name=""; for(let i=0;i<16;i++){ const c=b[85+i]; if(!c) break; if(c>=32&&c<127) name+=String.fromCharCode(c); }
+  return {sp:{w:w,h:h,rows:rows},p:p,terrain:terrain,name:name};
+}
+if(typeof module!=="undefined") module.exports={HXC,HXC_DEFAULT,HXC_BUILTIN_ROWS,HxcWorld,hxcSpriteFromLines,hxcBake,hxcParse,HXC_FILE_SIZE};
+
+// ============================================================
+// 箱庭 (v0.11): キャラの絵・性格・地形を作って、ブラウザで動かしてみて、本体へ送る
+//   エンジンは src/hako_engine.js (本体の hxm_char.h と同じ動き)
+// ============================================================
+(function(){
+const HK_PARAMS=[   // キー, 名前, 最小, 最大, 刻み, 表示
+  ["grav","重さ",5,150,1],
+  ["bounce","跳ね返り",0,230,1],
+  ["fric","止まりやすさ",2,160,1],
+  ["stick","滑り出す傾き",0,600,10,v=>v+"mg"],
+  ["jump","ジャンプ力",0,500,5],
+  ["maxv","最高速度",40,255,5],
+  ["whim","気まぐれ",0,255,5],
+  ["sleepAfter","寝るまで",300,7200,60,v=>Math.round(v/60)+"秒"],
+  ["slosh","回転の慣性",-100,100,5],
+];
+const HK_KEY="hexa-hako";
+const hk={cells:new Uint8Array(256), ter:new Uint8Array(256), p:Object.assign({},HXC_DEFAULT), name:"hexa",
+  mode:"c", ang:0, swing:false, phone:null, ev:0, w:new HxcWorld(), shown:false, raf:0, acc:0, last:0,
+  trying:false, tryT:0, seed:1};
+
+// ---- 絵 ⇔ セル
+function builtinCells(){
+  const c=new Uint8Array(256), ox=1, oy=3;
+  HXC_BUILTIN_ROWS.forEach((r,y)=>{ for(let x=0;x<r.length;x++) if(r[x]==="#") c[(y+oy)*16+x+ox]=1; });
+  return c;
+}
+function cellsToSprite(cells){
+  let x0=16,y0=16,x1=-1,y1=-1;
+  for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(cells[y*16+x]){ x0=Math.min(x0,x); y0=Math.min(y0,y); x1=Math.max(x1,x); y1=Math.max(y1,y); }
+  if(x1<0) return null;
+  const rows=new Array(16).fill(0);
+  for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) if(cells[y*16+x]) rows[y-y0]|=(1<<(x-x0));
+  return {w:x1-x0+1,h:y1-y0+1,rows:rows};
+}
+function spriteToCells(sp){
+  const c=new Uint8Array(256), ox=Math.floor((16-sp.w)/2), oy=16-sp.h;
+  for(let y=0;y<sp.h;y++) for(let x=0;x<sp.w;x++) if((sp.rows[y]>>x)&1) c[(y+oy)*16+x+ox]=1;
+  return c;
+}
+const terRows=()=>{ const r=new Array(16).fill(0); for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.ter[y*16+x]) r[y]|=(1<<x); return r; };
+function bytes(){ const sp=cellsToSprite(hk.cells); return sp?hxcBake(sp,hk.p,terRows(),hk.name):null; }
+
+// ---- 保存 (ブラウザ)
+function save(){ try{ localStorage.setItem(HK_KEY,JSON.stringify({c:Array.from(hk.cells),t:Array.from(hk.ter),p:hk.p,n:hk.name})); }catch(e){} }
+function load(){
+  try{ const j=JSON.parse(localStorage.getItem(HK_KEY)||"null"); if(!j) return false;
+    if(j.c&&j.c.length===256) hk.cells=Uint8Array.from(j.c); if(j.t&&j.t.length===256) hk.ter=Uint8Array.from(j.t);
+    hk.p=Object.assign({},HXC_DEFAULT,j.p||{}); hk.name=String(j.n||"hexa"); return true; }catch(e){ return false; }
+}
+
+// ---- 動かす
+function resetSim(){
+  const sp=cellsToSprite(hk.cells);
+  hk.w=new HxcWorld();
+  if(!sp){ return; }
+  hk.w.init(sp,hk.p,hk.seed=(hk.seed*1103515245+12345)>>>0||1);
+  hk.w.terrain=terRows();
+  // 地形に埋まっていたら上へ逃がす
+  for(let k=0;k<16&&hk.w.solid(hk.w.x>>8,hk.w.y>>8,hk.w.bw(),hk.w.bh());k++) hk.w.y-=256;
+}
+function input(){
+  if(hk.phone&&hk.phone.g) return {gx:hk.phone.g[0],gy:hk.phone.g[1],gz:hk.phone.g[2],wz:0};
+  const sw=hk.swing?14*Math.sin(performance.now()/1000*2*Math.PI*1.2):0;
+  const r=(hk.ang+sw)*Math.PI/180;
+  return {gx:Math.round(-1000*Math.sin(r)),gy:Math.round(1000*Math.cos(r)),gz:0,wz:0};
+}
+function tick(t){
+  if(!hk.shown) return;
+  if(!hk.last) hk.last=t;
+  hk.acc+=Math.min(200,t-hk.last); hk.last=t;
+  while(hk.acc>=1000/60){
+    hk.acc-=1000/60;
+    if(hk.w.sp.w){ const i=input(); i.ev=hk.ev; hk.ev=0; if(hk.phone&&hk.phone.ev){ i.ev|=hk.phone.ev; hk.phone.ev=0; } hk.w.step(i); }
+  }
+  drawSim();
+  hk.raf=requestAnimationFrame(tick);
+}
+function drawSim(){
+  const cv=$("hkpv"), g=cv.getContext("2d"), S=cv.width;
+  g.fillStyle="#06080b"; g.fillRect(0,0,S,S);
+  const sw=hk.phone&&hk.phone.g?0:(hk.swing?14*Math.sin(performance.now()/1000*2*Math.PI*1.2):0);
+  const a=hk.phone&&hk.phone.g?0:(hk.ang+sw)*Math.PI/180;
+  g.save(); g.translate(S/2,S/2+10); g.rotate(-a);
+  const D=290, R=26;
+  if(hk.phone&&hk.phone.g){} else if(Math.abs(hk.ang)<30){ g.strokeStyle="#9aa0a6"; g.lineWidth=3; g.beginPath(); g.moveTo(0,-D/2-12); g.lineTo(0,-D/2-200); g.stroke(); }
+  g.fillStyle="#1c1f24"; g.strokeStyle="#454b55"; g.lineWidth=3;
+  g.beginPath(); if(g.roundRect) g.roundRect(-D/2,-D/2,D,D,R); else g.rect(-D/2,-D/2,D,D); g.fill(); g.stroke();
+  g.fillStyle="#ffb02e"; g.fillRect(-16,-D/2-14,32,16); g.fillStyle="#06080b"; g.fillRect(-7,-D/2-9,14,7);   // 吊り穴の印
+  const f=hk.w.sp.w?hk.w.render():new Uint8Array(32), p=(D-40)/16, x0=-D/2+20+p/2, y0=-D/2+20+p/2, slp=hk.w.sleeping&&hk.w.sleeping();
+  for(let y=0;y<16;y++) for(let x=0;x<16;x++){
+    const on=(f[y*2+(x>>3)]>>(7-(x&7)))&1;
+    g.fillStyle=on?(slp?"#7c8199":"#eef2ff"):"#2a3038";
+    g.beginPath(); g.arc(x0+x*p,y0+y*p,on?p*0.34:p*0.13,0,6.2832); g.fill();
+  }
+  g.restore();
+  const qn=["下","左","上","右"][hk.w.q|0]||"-";
+  $("hkInfo").textContent=hk.w.sp.w?("状態: "+HXC.ST_NAME[hk.w.st]+" ・ 床: 画面の"+qn+(hk.phone&&hk.phone.g?" ・ スマホの傾き":" ・ 傾き "+Math.round(((hk.ang%360)+540)%360-180)+"°")):"キャラを描いてください";
+}
+
+// ---- 絵を描く
+function drawEd(){
+  const cv=$("hkEd"), g=cv.getContext("2d"), S=cv.width, p=S/16;
+  g.fillStyle="#000"; g.fillRect(0,0,S,S);
+  const sp=cellsToSprite(hk.cells), info=new HxcWorld();
+  let eyes=[], ox=0, oy=0;
+  if(sp){ info.init(sp,hk.p,1); for(let i=0;i<2;i++) if(info.eyeX[i]>=0) eyes.push([info.eyeX[i],info.eyeY[i]]);
+    // 絵の左上 (セル上)
+    outer: for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]){ oy=y; break outer; }
+    ox=16; for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]) ox=Math.min(ox,x);
+  }
+  for(let y=0;y<16;y++) for(let x=0;x<16;x++){
+    const c=hk.cells[y*16+x], t=hk.ter[y*16+x], cx=(x+.5)*p, cy=(y+.5)*p;
+    let col="#1b1f26", r=p*0.16;
+    if(hk.mode==="c"){ if(c){ col="#ffffff"; r=p*0.38; } else if(t){ col="#3b4250"; r=p*0.3; } }
+    else { if(t){ col="#2fd67b"; r=p*0.38; } else if(c){ col="#4a4f5a"; r=p*0.3; } }
+    g.fillStyle=col; g.beginPath(); g.arc(cx,cy,r,0,6.2832); g.fill();
+  }
+  if(hk.mode==="c") for(const [ex,ey] of eyes){ g.strokeStyle="#ffb02e"; g.lineWidth=2; g.beginPath(); g.arc((ex+ox+.5)*p,(ey+oy+.5)*p,p*0.42,0,6.2832); g.stroke(); }
+  $("hkFound").textContent=sp?("大きさ "+sp.w+"×"+sp.h+" ・ 目 "+eyes.length+" (オレンジの丸) ・ 脚 "+info.legN+(sp.w>14||sp.h>14?" ・ ※大きいので、あまり動けません":"")):"キャラがありません";
+}
+let paint=null;
+function cellAt(e){ const cv=$("hkEd"), r=cv.getBoundingClientRect(); const x=Math.floor((e.clientX-r.left)/r.width*16), y=Math.floor((e.clientY-r.top)/r.height*16); return (x<0||y<0||x>15||y>15)?-1:y*16+x; }
+function edDown(e){ const i=cellAt(e); if(i<0) return; const a=hk.mode==="c"?hk.cells:hk.ter; paint=a[i]?0:1; a[i]=paint; changed(); try{ e.target.setPointerCapture(e.pointerId); }catch(_){} }
+function edMove(e){ if(paint===null) return; const i=cellAt(e); if(i<0) return; const a=hk.mode==="c"?hk.cells:hk.ter; if(a[i]!==paint){ a[i]=paint; changed(); } }
+function edUp(){ paint=null; }
+
+// ---- 性格
+function buildParams(){
+  const el=$("hkParams"); el.innerHTML="";
+  for(const [k,label,mn,mx,stp,fmt] of HK_PARAMS){
+    const row=document.createElement("div"); row.className="hkrow";
+    const h=document.createElement("span"); h.className="h"; h.textContent=label;
+    const r=document.createElement("input"); r.type="range"; r.min=mn; r.max=mx; r.step=stp; r.value=hk.p[k]; r.id="hkp_"+k;
+    const v=document.createElement("span"); v.className="v"; v.textContent=fmt?fmt(hk.p[k]):hk.p[k];
+    r.oninput=()=>{ hk.p[k]=+r.value; v.textContent=fmt?fmt(hk.p[k]):hk.p[k]; changed(true); };
+    row.appendChild(h); row.appendChild(r); row.appendChild(v); el.appendChild(row);
+  }
+}
+
+// ---- 変わった
+let chT=0;
+function changed(paramOnly){
+  save(); drawEd();
+  clearTimeout(chT); chT=setTimeout(()=>{ resetSim(); if(hk.trying) sendTry(true); },paramOnly?250:120);
+}
+
+// ---- 本体
+const fwOk=()=>!!devFw && devFw.localeCompare("0.11.0",undefined,{numeric:true})>=0;
+function devState(){
+  const on=!!writer&&fwOk()&&!devBusy;
+  $("hkTry").disabled=!on; $("hkSave").disabled=!on; $("hkStop").disabled=!(writer&&hk.trying);
+}
+async function sendTry(quiet){
+  const b=bytes(); if(!b||!writer) return;
+  if(typeof stopPlay==="function") stopPlay();
+  try{ const j=await xferFile("@char",b); hk.trying=true; if(!quiet){ log("本体で箱庭を試しています: "+(j.char||hk.name)+" (止めるまで箱庭のまま)","ok"); status("本体で試しています","ok"); } }
+  catch(e){ hk.trying=false; log("箱庭: "+e.message,"err"); status(e.message,"err"); }
+  devState();
+}
+function stopTry(){
+  if(hk.trying&&writer) tx(packet(HXF.PLAY,[0xFE]));
+  hk.trying=false; devState();
+}
+async function saveDev(){
+  const b=bytes(); if(!b) return;
+  if(typeof stopPlay==="function") stopPlay();
+  try{ const j=await xferFile("hako.hxc",b); log("本体に保存しました: 箱庭のキャラ「"+(j.char||hk.name)+"」 (USB を抜くと出てきます)","ok"); status("本体に保存しました","ok"); }
+  catch(e){ log("箱庭: "+e.message,"err"); status(e.message,"err"); }
+}
+
+// ---- スマホの傾き
+async function phoneOn(){
+  if(hk.phone){ window.removeEventListener("devicemotion",hk.phone.fn); hk.phone=null; $("hkPhone").textContent="スマホの傾きで動かす"; $("hkPhoneSt").textContent=""; return; }
+  const DM=window.DeviceMotionEvent;
+  if(!DM){ $("hkPhoneSt").textContent="このブラウザは傾きセンサーが使えません"; return; }
+  if(typeof DM.requestPermission==="function"){
+    try{ if(await DM.requestPermission()!=="granted"){ $("hkPhoneSt").textContent="傾きセンサーの許可がありません"; return; } }
+    catch(e){ $("hkPhoneSt").textContent="傾きセンサーを使えません: "+e.message; return; }
+  }
+  const ios=typeof DM.requestPermission==="function", s=ios?-1:1;   // iOS は向きが逆
+  const ph={g:null,ev:0,last:null,cool:0,peaks:[],fn:null};
+  ph.fn=e=>{
+    const a=e.accelerationIncludingGravity; if(!a||a.x==null) return;
+    const ax=a.x*s, ay=a.y*s, az=(a.z||0)*s;
+    ph.g=[Math.round(-ax/9.81*1000),Math.round(ay/9.81*1000),Math.round(az/9.81*1000)];   // 画面の向き (y は下が +)
+    const now=performance.now(), m=Math.hypot(ax,ay,az);
+    if(ph.last){ const j=Math.hypot(ax-ph.last[0],ay-ph.last[1],az-ph.last[2]);
+      if(m>19.6){ ph.peaks=ph.peaks.filter(t=>now-t<800); if(!ph.peaks.length||now-ph.peaks[ph.peaks.length-1]>120) ph.peaks.push(now); if(ph.peaks.length>=3){ ph.ev|=HXC.SHAKE; ph.peaks=[]; ph.cool=now+1500; } }
+      else if(j>10.8&&now>ph.cool){ ph.ev|=HXC.TAP; ph.cool=now+400; } }
+    ph.last=[ax,ay,az];
+  };
+  window.addEventListener("devicemotion",ph.fn); hk.phone=ph;
+  $("hkPhone").textContent="スマホの傾きをやめる"; $("hkPhoneSt").textContent="スマホを CoreMatrix に見立てて傾けてください (縦向き固定がおすすめ)";
+}
+
+// ---- つなぐ
+function wire(){
+  $("hkEd").addEventListener("pointerdown",edDown); $("hkEd").addEventListener("pointermove",edMove);
+  window.addEventListener("pointerup",edUp);
+  const pv=$("hkpv"); let drag=null;
+  pv.addEventListener("pointerdown",e=>{ drag=e.clientX; try{ pv.setPointerCapture(e.pointerId); }catch(_){} pv.style.cursor="grabbing"; });
+  pv.addEventListener("pointermove",e=>{ if(drag===null) return; hk.ang-=(e.clientX-drag)*0.6; drag=e.clientX; });
+  pv.addEventListener("pointerup",()=>{ drag=null; pv.style.cursor="grab"; });
+  $("hkL90").onclick=()=>{ hk.ang+=90; }; $("hkR90").onclick=()=>{ hk.ang-=90; };
+  $("hk180").onclick=()=>{ hk.ang+=180; }; $("hk0").onclick=()=>{ hk.ang=0; };
+  $("hkSwing").onchange=e=>{ hk.swing=e.target.checked; };
+  $("hkTap").onclick=()=>{ hk.ev|=HXC.TAP; }; $("hkShake").onclick=()=>{ hk.ev|=HXC.SHAKE; };
+  $("hkPet").onclick=()=>{ hk.ev|=HXC.PET; }; $("hkPoke").onclick=()=>{ hk.ev|=HXC.POKE; };
+  $("hkSleep").onclick=()=>{ hk.w.still=0xFFFF; };
+  $("hkPhone").onclick=phoneOn;
+  $("hkModeC").onclick=()=>{ hk.mode="c"; $("hkModeC").classList.add("sel"); $("hkModeT").classList.remove("sel"); drawEd(); };
+  $("hkModeT").onclick=()=>{ hk.mode="t"; $("hkModeT").classList.add("sel"); $("hkModeC").classList.remove("sel"); drawEd(); };
+  $("hkBuiltin").onclick=()=>{ hk.cells=builtinCells(); changed(); };
+  $("hkFromMark").onclick=()=>{ if(typeof grid==="undefined") return; hk.cells=Uint8Array.from(grid); changed(); status("「マークを作る」の絵を使いました","ok"); };
+  $("hkFlip").onclick=()=>{ const a=hk.mode==="c"?hk.cells:hk.ter, b=new Uint8Array(256); for(let y=0;y<16;y++) for(let x=0;x<16;x++) b[y*16+x]=a[y*16+15-x]; if(hk.mode==="c") hk.cells=b; else hk.ter=b; changed(); };
+  $("hkClear").onclick=()=>{ if(!confirm(hk.mode==="c"?"キャラの絵を消します。よろしいですか？":"地形を消します。よろしいですか？")) return; if(hk.mode==="c") hk.cells=new Uint8Array(256); else hk.ter=new Uint8Array(256); changed(); };
+  $("hkDefault").onclick=()=>{ hk.p=Object.assign({},HXC_DEFAULT); buildParams(); changed(true); };
+  $("hkName").value=hk.name; $("hkName").oninput=e=>{ hk.name=e.target.value.replace(/[^\x20-\x7e]/g,"").slice(0,16); save(); };
+  $("hkExport").onclick=()=>{ const b=bytes(); if(!b){ status("キャラがありません","err"); return; } download((hk.name||"hako").replace(/[^A-Za-z0-9_-]+/g,"_")+".hxc",new Blob([b],{type:"application/octet-stream"})); status("書き出しました","ok"); };
+  $("hkImport").onclick=()=>$("hkFile").click();
+  $("hkFile").onchange=async e=>{
+    const f=e.target.files[0]; e.target.value=""; if(!f) return;
+    const j=hxcParse(new Uint8Array(await f.arrayBuffer()));
+    if(!j){ status(".hxc の形が違います","err"); return; }
+    hk.cells=spriteToCells(j.sp); hk.ter=new Uint8Array(256); j.terrain.forEach((r,y)=>{ for(let x=0;x<16;x++) if((r>>x)&1) hk.ter[y*16+x]=1; });
+    hk.p=Object.assign({},HXC_DEFAULT,j.p); hk.name=j.name||hk.name; $("hkName").value=hk.name; buildParams(); changed(); status("読み込みました: "+(j.name||f.name),"ok");
+  };
+  $("hkTry").onclick=()=>sendTry(false); $("hkStop").onclick=stopTry; $("hkSave").onclick=saveDev;
+  setInterval(()=>{ if(!writer) hk.trying=false; devState(); },500);
+}
+
+// 画面の切り替え (program.js の setView から)
+window.hakoShow=function(on){
+  if(on===hk.shown) return;
+  hk.shown=on;
+  if(on){ drawEd(); hk.last=0; hk.raf=requestAnimationFrame(tick); }
+  else { cancelAnimationFrame(hk.raf); if(hk.trying) stopTry(); }
+};
+
+if(!load()) hk.cells=builtinCells();
+buildParams(); wire(); resetSim(); drawEd(); drawSim();
+})();
 
 libLoad(); libRender(); render(); stripRender(); push();
 progInit();

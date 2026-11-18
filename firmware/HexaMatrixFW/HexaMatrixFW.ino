@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.10.1 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.11.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -69,6 +69,11 @@
 //   ・hako=on (いつも箱庭: 開発・展示用) では Wi-Fi を切らず、本体も眠らない (CPZ から Wi-Fi でつながったまま戻せる)。
 //     Wi-Fi を切って眠るのは、USB なしで自動的に箱庭になった時だけ (以前は on でも Wi-Fi を切り、CPZ から戻せなくなった)
 //   ・A と C を同時に長押し (1.5秒) で箱庭を抜ける。on なら auto に戻し、電池でも USB を抜き差しするまでは箱庭に入らない
+//
+//   v0.11.0: STUDIO の「箱庭」から キャラ (.hxc、hxm_char.h の hxcParse) を受け取る
+//   ・"hako.hxc" で保存 → 箱庭のキャラになる (無ければ組み込みのキャラ)。返事 {"ok":true,"saved":"hako.hxc","char":名前}
+//   ・"@char" はメモリだけ (試す): その場で「試しの箱庭」に入る (Wi-Fi・USB はつながったまま、眠らない)。
+//     PLAY 0xFE / 0xFF・A+C 長押しで抜ける。試しのキャラは眠りの後に残さない。返事 {"ok":true,"char":名前,"try":true}
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -90,7 +95,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.10.1";
+static const char* FW_VER = "0.11.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -132,6 +137,13 @@ static uint16_t cfgDeep = 90;           // キャラが寝てから、さらに�
 static uint16_t cfgAnyMg = 60;          // 「動いた」とみなす揺れ (mg)
 static bool     cfgPlog = false;        // 電池の記録 (/hexa/power.csv)
 static bool     hakoOn = false;
+static bool     hakoPreview = false;    // STUDIO の「実機で試す」(@char) で入った試しの箱庭
+static bool     hakoTemp = false;       // いまのキャラは試し (眠りの後・次の箱庭に残さない)
+static bool     upRamChar = false;      // メモリへの受け取りが @char
+static HxcSprite hcSp; static HxcParams hcPr; static uint16_t hcTer[16]; static char hcName[17] = "";
+static bool     hcOk = false;           // hako.hxc を読めた
+static const char* HAKO_CHAR = "/hexa/hako.hxc";
+static void hakoStart(bool resume); static void hakoStop(); static void hakoReset(); static void hakoLoadChar();
 static bool     hakoKeepNet = false;    // 箱庭の間も Wi-Fi を保つ (hako=on の時)
 static bool     hakoSuppress = false;   // A+C 長押しで抜けた: USB の抜き差しまで自動では入らない
 static int8_t   lastUsb = -1;
@@ -285,11 +297,13 @@ static void sendStatus() {
               wSsid[1].length() ? "true" : "false");
   // v0.10: 箱庭
   out->printf("\"mode\":\"%s\",\"vbus\":%d,\"hako\":{\"set\":\"%s\",\"st\":%d,\"q\":%d,\"chg\":%u,\"hflip\":%d,"
-              "\"imuhi\":%d,\"peek\":%u,\"deep\":%u,\"anymg\":%u,\"plog\":%d,\"peeks\":%lu,\"sleeps\":%lu}}\n",
+              "\"imuhi\":%d,\"peek\":%u,\"deep\":%u,\"anymg\":%u,\"plog\":%d,\"peeks\":%lu,\"sleeps\":%lu,"
+              "\"char\":\"%s\",\"try\":%s}}\n",
               hakoOn ? "hako" : "home", (int)M5.Power.getVBUSVoltage(),
               cfgHako == HAKO_ON ? "on" : cfgHako == HAKO_OFF ? "off" : "auto", hakoOn ? (int)hako.st : -1, (int)hako.q,
               cfgChg, cfgHflip < 0 ? 1 : 0, cfgImuHigh ? 1 : 0, cfgPeek, cfgDeep, cfgAnyMg, cfgPlog ? 1 : 0,
-              (unsigned long)rtcPeeks, (unsigned long)rtcSleeps);
+              (unsigned long)rtcPeeks, (unsigned long)rtcSleeps,
+              hcOk ? hcName : "", hakoPreview ? "true" : "false");
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -472,6 +486,7 @@ static void handleFile() {
         }
         clipMode = false;                         // 書き換えるので止める
         upRam = true; upRamLoop = !(n >= 9 && memcmp(b + 4, "@once", 5) == 0);
+        upRamChar = (n >= 9 && memcmp(b + 4, "@char", 5) == 0);   // v0.11: 箱庭のキャラを試す
         up.begin(sz); upLastMs = millis(); upFromNet = (out == &client);
         out->println("{\"ok\":true,\"ack\":\"begin\"}");
         return;
@@ -517,6 +532,17 @@ static void handleFile() {
         //         見なされ、流していた番組を頭から開き直していた)
         if (r) { failUpload(r == 1 ? "size" : r == 2 ? "crc" : "not started"); return; }
         upRam = false;
+        if (upRamChar) {                          // v0.11: キャラを試す (保存しない)
+          upRamChar = false;
+          HxcSprite sp; HxcParams pr; uint16_t ter[16]; char nm[17];
+          if (!hxcParse(clipBuf, up.size, sp, pr, ter, nm)) { sendErr("bad char"); return; }
+          hakoPreview = true;
+          if (!hakoOn) hakoStart(false);
+          else hakoKeepNet = true;
+          hako.init(sp, pr, esp_random()); memcpy(hako.terrain, ter, sizeof ter); hakoTemp = true;
+          out->printf("{\"ok\":true,\"char\":\"%s\",\"try\":true}\n", nm);
+          return;
+        }
         int32_t cnt = hxm_check_header(clipBuf, up.size);
         if (cnt < 0) { if (paused && !live) goIdle(); sendErr("bad clip"); return; }
         clipCount = cnt; clipIdx = 0; clipLoop = upRamLoop;
@@ -530,6 +556,16 @@ static void handleFile() {
       String path = String(DIR) + "/" + upName;
       if (FSYS->exists(path)) FSYS->remove(path);
       if (!FSYS->rename(TMP, path)) { failUpload("rename failed"); return; }
+      if (path.endsWith(".hxc")) {                // v0.11: 箱庭のキャラ (番組の一覧には入れない)
+        if (path != HAKO_CHAR) { FSYS->remove(HAKO_CHAR); FSYS->rename(path, HAKO_CHAR); }
+        hakoLoadChar();
+        if (!hcOk) { FSYS->remove(HAKO_CHAR); sendErr("bad char"); return; }
+        rtcMagic = 0;                             // 前のキャラの続きは捨てる
+        if (hakoOn) { hakoReset(); if (hakoPreview) hakoTemp = false; }
+        if (!hakoOn && !paused) openProgram(cur, false);   // BEGIN で閉じた番組を開き直す
+        out->printf("{\"ok\":true,\"saved\":\"hako.hxc\",\"char\":\"%s\"}\n", hcName);
+        return;
+      }
       scanFiles();
       int idx = 0; for (int i = 0; i < nfiles; i++) if (names[i] == upName) idx = i;
       paused = false; live = false; clipMode = false;   // 保存した番組をそのまま流す (自分で保存した時だけ)
@@ -555,6 +591,7 @@ static void handleFile() {
       return; }
     case HXM_PLAY:
       if (n != 1) { sendErr("bad play"); return; }
+      if ((b[0] == 0xFE || b[0] == 0xFF) && hakoPreview) { hakoPreview = false; if (hakoOn) hakoStop(); }   // v0.11: 試しの箱庭をやめる
       if (b[0] == 0xFE) { if (clipMode || live) goIdle(); }  // 一時再生をやめて消灯へ
       else if (b[0] == 0xFF) goIdle();                      // 止める (消灯)
       else { paused = false; live = false; clipMode = false; openProgram(b[0], true); }
@@ -837,10 +874,19 @@ static void handlePacket() {
 
 // ---------------------------------------------------------------- 箱庭 (v0.10)
 static bool usbPower() { int16_t v = M5.Power.getVBUSVoltage(); return v > 4000; }   // -1 (読めない) は電池扱い
+/// 保存してあるキャラ (hako.hxc) を読む。無い・壊れていれば組み込みのキャラ
+static void hakoLoadChar() {
+  hcOk = false;
+  if (!FSYS || !FSYS->exists(HAKO_CHAR)) return;
+  File f = FSYS->open(HAKO_CHAR, FILE_READ);
+  uint8_t b[HXC_FILE_SIZE];
+  if (f && f.read(b, sizeof b) == (int)sizeof b) hcOk = hxcParse(b, sizeof b, hcSp, hcPr, hcTer, hcName);
+  if (f) f.close();
+}
 static void hakoReset() {
-  HxcSprite sp; sp.parse(HXC_BUILTIN, HXC_BUILTIN_H);
-  HxcParams pr;
-  hako.init(sp, pr, esp_random());
+  if (hcOk) { hako.init(hcSp, hcPr, esp_random()); memcpy(hako.terrain, hcTer, sizeof hcTer); }
+  else { HxcSprite sp; sp.parse(HXC_BUILTIN, HXC_BUILTIN_H); HxcParams pr; hako.init(sp, pr, esp_random()); memset(hako.terrain, 0, sizeof hako.terrain); }
+  hakoTemp = false;
 }
 // BMI270 を直接 (M5Unified に無い any-motion の設定)
 static const uint8_t BMI = 0x68;
@@ -869,7 +915,10 @@ static void pm1ArmWake() {
   M5.Power.M5pm1.clearIRQStatus();
   M5.Power.M5pm1.setGPIOIRQMaskBits(0x08);
 }
-static void hakoSave() { memcpy(rtcWorld, &hako, sizeof hako); rtcMagic = HAKO_MAGIC; }
+static void hakoSave() {
+  if (hakoTemp) { rtcMagic = 0; return; }                 // 試しのキャラは残さない
+  memcpy(rtcWorld, &hako, sizeof hako); rtcMagic = HAKO_MAGIC;
+}
 static void hakoDeepSleep() {
   hakoSave(); rtcSleeping = 1; rtcSleeps++; rtcPeekSec = cfgPeek;
   memset(frame, 0, sizeof frame); drawFrame();
@@ -882,7 +931,7 @@ static void hakoDeepSleep() {
 }
 static void hakoStart(bool resume) {
   hakoOn = true;
-  hakoKeepNet = (cfgHako == HAKO_ON);                     // いつも箱庭 (開発・展示) は Wi-Fi を保つ
+  hakoKeepNet = (cfgHako == HAKO_ON) || hakoPreview;      // いつも箱庭 (開発・展示) と 試しの箱庭 は Wi-Fi を保つ
   if (!hakoKeepNet) {
     if (wifiOn) { if (client) client.stop(); MDNS.end(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
     wifiOn = serverUp = mdnsUp = wifiShown = false; wSleepNow = false;
@@ -980,7 +1029,7 @@ static void hakoButtons() {
     else if (millis() - bothSince > 1500) {
       bothSince = 0;
       if (cfgHako == HAKO_ON) { cfgHako = HAKO_AUTO; prefs.putUChar("hko", cfgHako); }
-      hakoSuppress = true;
+      hakoSuppress = true; hakoPreview = false;
       hakoStop();
       return;
     }
@@ -1078,6 +1127,7 @@ void setup() {
   detIn     = prefs.getChar("detIn", -1);
   cardDet = readCardDet();
   mountStorage();
+  hakoLoadChar();                        // v0.11: 保存してある箱庭のキャラ (保存先が決まってから)
   if (sdBad && !wantHako) { flashText("SD", 1500); delay(1500); }   // カードが読めない (FAT32 にしてください)
   if (wantHako) { goIdle(); hakoStart(rtcSleeping || esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED); }
   else {
@@ -1105,7 +1155,7 @@ void loop() {
     bool usb = usbPower();
     if (lastUsb >= 0 && (int8_t)usb != lastUsb) hakoSuppress = false;   // USB を抜き差ししたら A+C の「抜けた」を解除
     lastUsb = (int8_t)usb;
-    bool want = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usb && !hakoSuppress);
+    bool want = hakoPreview || cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usb && !hakoSuppress);
     if (want && !hakoOn && !up.active) hakoStart(true);
     else if (!want && hakoOn) hakoStop();
   }
@@ -1142,7 +1192,7 @@ void loop() {
     int d = readCardDet();
     if (d >= 0 && d != cardDet) {
       bool wasSd = (FSYS == &SD);
-      cardDet = d; mountStorage(wasSd);
+      cardDet = d; mountStorage(wasSd); hakoLoadChar();
       if (sdBad) { flashText("SD", 1500); delay(1500); }
       if (!paused) openProgram(cur, true);
     }

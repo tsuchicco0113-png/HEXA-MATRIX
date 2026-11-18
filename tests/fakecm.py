@@ -112,6 +112,15 @@ def handle(t, p):
         if not up: return
         if len(up["data"]) != up["size"]: up = None; return err("size")
         if zlib.crc32(bytes(up["data"])) != c: up = None; return err("crc")
+        d = bytes(up["data"])
+        if up["name"] == "@char" or up["name"].endswith(".hxc"):   # v0.11 箱庭のキャラ
+            if len(d) != 101 or d[:4] != b"HXC1": up = None; return err("bad char")
+            nm = d[85:101].split(b"\0")[0].decode("ascii", "replace")
+            open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} CHAR {up['name']} {nm}\n")
+            open("/tmp/fakecm_char.hxc", "wb").write(d)
+            if up["name"] == "@char": HAKO["try"] = 1; out({"ok": True, "char": nm, "try": True})
+            else: HAKO["char"] = nm; out({"ok": True, "saved": "hako.hxc", "char": nm})
+            up = None; return
         if up.get("ram"):
             d = bytes(up["data"]); cnt = struct.unpack_from("<I", d, 4)[0] & 0x7FFFFFFF
             open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} CLIP {up['name']} {cnt} {len(d)}\n")
@@ -126,6 +135,7 @@ def handle(t, p):
         if n in FILES: del FILES[n]; lst()
         else: err("not found")
     elif t == 0x15:
+        if p[0] >= 0xFE: HAKO.pop("try", None)
         if p[0] == 0xFE: open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} STOPCLIP\n")
         elif p[0] == 0xFF: paused = True
         else: paused = False; live = False; cur = p[0] % max(1, len(FILES))
