@@ -77,6 +77,8 @@ def handle(t, p):
             elif k in ("hflip", "imuhi", "plog") and fwv() >= (0, 10, 0): HAKO[k] = 1 if v[:1] in "1ot" else 0
             elif k in ("peek", "deep", "anymg") and fwv() >= (0, 10, 0): HAKO[k] = int(v)
             elif k == "hakoreset": pass
+            elif k == "hakoev" and fwv() >= (0, 11, 1):
+                open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} HAKOEV {v}\n"); return out({"ok": True, "hakoev": "try" in HAKO})
             elif k == "rotreset": LEARN[0] = 0
             elif k == "rotlearn": LEARN[0] += 1
             else: return err("bad config")

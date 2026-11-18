@@ -432,7 +432,7 @@
       </div>
       <div class="grp"><button id="hkPhone">スマホの傾きで動かす</button><span class="lbl" id="hkPhoneSt"></span></div>
       <div class="hint">画面を左右にドラッグすると本体を回せます (オレンジの印が吊り穴)。<br>
-        <b>実機で試す</b>は保存せずに本体で動かします (止めるまで箱庭のまま。試している間は、変えるたびに送り直します)。<br>
+        <b>実機で試す</b>は保存せずに本体で動かします (止めるまで箱庭のまま。試している間は、変えるたびに送り直します。叩く・振る・なでる・つつく・寝かせる も本体に届きます (ファーム v0.11.1〜)。傾きは本体を実際に傾けてください)。<br>
         <b>本体に保存</b>すると、USB を抜いた時の箱庭のキャラになります。ファーム v0.11 以上。</div>
       <div class="grp" style="margin-top:8px">
         <button id="hkTry" class="primary" disabled>実機で試す</button>
@@ -810,7 +810,7 @@ function onLine(ln){
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
   }
-  if(j.ack!==undefined || j.saved!==undefined || j.char!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
+  if(j.ack!==undefined || j.saved!==undefined || j.char!==undefined || j.hakoev!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
   if(j.list){ devList=j; devRender(); return; }
   if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
   if(j.bench_us!==undefined){ log("速度計測: 1コマ "+(j.bench_us/1000).toFixed(1)+"ms (最大 約"+j.fps_max+"コマ/秒)","ok"); return; }

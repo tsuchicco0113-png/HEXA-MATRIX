@@ -95,7 +95,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.11.0";
+static const char* FW_VER = "0.11.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -792,7 +792,7 @@ static void handleConfig() {
     sendStatus();
     return;
   }
-  bool bad = false;
+  bool bad = false, evOnly = false;
   for (char* p = s; p && *p;) {
     char* e = strchr(p, ';'); if (e) *e = 0;
     char* eq = strchr(p, '=');
@@ -820,11 +820,20 @@ static void handleConfig() {
       else if (!strcmp(k, "anymg")) { int n = atoi(v); cfgAnyMg = (uint16_t)(n < 20 ? 20 : n > 500 ? 500 : n); prefs.putUShort("amg", cfgAnyMg); }
       else if (!strcmp(k, "plog")) { cfgPlog = on; prefs.putBool("plg", on); }
       else if (!strcmp(k, "hakoreset")) { if (on) { rtcMagic = 0; if (hakoOn) hakoReset(); } }
+      else if (!strcmp(k, "hakoev")) {                              // v0.11.1: STUDIO の 叩く/振る/なでる/つつく (1/2/4/8)・寝かせる (16)
+        int n = atoi(v);
+        if (hakoOn) {
+          hakoEv |= (uint8_t)(n & 15);
+          if (n & 16) { hako.still = hako.pr.sleepAfter + 1; hako.enter(HXC_SLEEP); }
+        }
+        evOnly = true;
+      }
       else bad = true;
     } else if (*p) bad = true;
     p = e ? e + 1 : nullptr;
   }
   if (bad) { sendErr("bad config"); return; }
+  if (evOnly) { out->printf("{\"ok\":true,\"hakoev\":%s}\n", hakoOn ? "true" : "false"); return; }   // 毎回の状態は返さない
   sendStatus();
 }
 

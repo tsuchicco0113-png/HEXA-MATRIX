@@ -146,7 +146,13 @@ function changed(paramOnly){
 }
 
 // ---- 本体
-const fwOk=()=>!!devFw && devFw.localeCompare("0.11.0",undefined,{numeric:true})>=0;
+const fwAt=v=>!!devFw && devFw.localeCompare(v,undefined,{numeric:true})>=0;
+const fwOk=()=>fwAt("0.11.0");
+// 試している間は、叩く・振る・なでる・つつく・寝かせる を本体にも送る (ファーム v0.11.1〜)
+function devEv(bits){
+  if(!hk.trying||!writer||!fwAt("0.11.1")) return;
+  tx(packet(7,Array.from("hakoev="+bits,c=>c.charCodeAt(0))));
+}
 function devState(){
   const on=!!writer&&fwOk()&&!devBusy;
   $("hkTry").disabled=!on; $("hkSave").disabled=!on; $("hkStop").disabled=!(writer&&hk.trying);
@@ -205,9 +211,10 @@ function wire(){
   $("hkL90").onclick=()=>{ hk.ang+=90; }; $("hkR90").onclick=()=>{ hk.ang-=90; };
   $("hk180").onclick=()=>{ hk.ang+=180; }; $("hk0").onclick=()=>{ hk.ang=0; };
   $("hkSwing").onchange=e=>{ hk.swing=e.target.checked; };
-  $("hkTap").onclick=()=>{ hk.ev|=HXC.TAP; }; $("hkShake").onclick=()=>{ hk.ev|=HXC.SHAKE; };
-  $("hkPet").onclick=()=>{ hk.ev|=HXC.PET; }; $("hkPoke").onclick=()=>{ hk.ev|=HXC.POKE; };
-  $("hkSleep").onclick=()=>{ hk.w.still=0xFFFF; };
+  const ev=b=>{ hk.ev|=b; devEv(b); };
+  $("hkTap").onclick=()=>ev(HXC.TAP); $("hkShake").onclick=()=>ev(HXC.SHAKE);
+  $("hkPet").onclick=()=>ev(HXC.PET); $("hkPoke").onclick=()=>ev(HXC.POKE);
+  $("hkSleep").onclick=()=>{ hk.w.still=0xFFFF; devEv(16); };
   $("hkPhone").onclick=phoneOn;
   $("hkModeC").onclick=()=>{ hk.mode="c"; $("hkModeC").classList.add("sel"); $("hkModeT").classList.remove("sel"); drawEd(); };
   $("hkModeT").onclick=()=>{ hk.mode="t"; $("hkModeT").classList.add("sel"); $("hkModeC").classList.remove("sel"); drawEd(); };
