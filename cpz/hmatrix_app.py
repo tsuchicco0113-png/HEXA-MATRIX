@@ -8,7 +8,7 @@ CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd
   1 ことば    : 打った文字をその場で CoreMatrix に流す (英数字・記号)
   2 ライブラリ: CPZ に置いた番組 (STUDIO の「CPZに置く」) を CPZ から流す / 本体SDへ送る
   3 本体      : CoreMatrix の中の番組を選んで流す・止める・消す
-  4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / イベントAP / スマホから開くQR
+  4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / 箱庭 / 充電 / イベントAP / スマホから開くQR
 右側の 16×16 は、いま CPZ から流している絵
 
 共通: ESC = ホームへ (ホームでは終了確認)  方向キー = F(↑) X(↓) Z(←) C(→)
@@ -36,7 +36,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.9.6"
+VERSION = "0.10.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -375,26 +375,34 @@ class App:
         self.toast_draw(img)
         return img
 
-    SET_ROWS = 8
+    SET_KEYS = ["bright", "rot", "autorot", "shake", "psave", "hako", "chg", "hflip", "ap", "teach", "stop"]
+    SET_ROWS = len(SET_KEYS)
 
     def set_items(self):
         dv = self.hub.st.get("dev") or {}
         cfg = dv.get("cfg") or {}
+        hk = dv.get("hako") or {}
         new = "cfg" in dv                                    # ファーム v0.9.6〜
+        newh = "hako" in dv                                  # ファーム v0.10〜
         onoff = lambda k: ("入" if cfg.get(k) else "切") if new else "要v0.9.6"
         learn = dv.get("learn", 0)
         rot = onoff("autorot") + (f" (覚えた向き{learn})" if new and cfg.get("autorot") else "")
         if dv.get("imu") == "none":
             rot = "IMUなし"
         ap = self.ap or {}
-        return [("CoreMatrix の明るさ", f"{self.master + 1}/4"),
-                ("向き", f"{dv.get('rot', '?')} (ENTERで90°)"),
-                ("自動回転", rot),
-                ("振って次の番組", onoff("shake")),
-                ("消灯中の省電力", onoff("psave")),
-                ("イベントAP (CPZ)", "?" if not ap else ("入" if ap.get("on") else "切") if ap.get("ok") else "使えません"),
-                ("APを本体に教える", "USB で ENTER"),
-                ("CPZから止める", "ENTER")]
+        hset = {"auto": "自動 (USBなしで)", "on": "いつも", "off": "使わない"}.get(hk.get("set"), "?")
+        rows = {"bright": ("CoreMatrix の明るさ", f"{self.master + 1}/4"),
+                "rot": ("向き", f"{dv.get('rot', '?')} (ENTERで90°)"),
+                "autorot": ("自動回転", rot),
+                "shake": ("振って次の番組", onoff("shake")),
+                "psave": ("消灯中の省電力", onoff("psave")),
+                "hako": ("箱庭", hset + (" ・いま箱庭" if dv.get("mode") == "hako" else "") if newh else "要v0.10"),
+                "chg": ("充電の速さ", (f"{hk.get('chg', 180)}mA" + (" (18350×2 用)" if hk.get("chg") == 650 else "")) if newh else "要v0.10"),
+                "hflip": ("箱庭の傾き 左右", ("反対" if hk.get("hflip") else "ふつう") if newh else "要v0.10"),
+                "ap": ("イベントAP (CPZ)", "?" if not ap else ("入" if ap.get("on") else "切") if ap.get("ok") else "使えません"),
+                "teach": ("APを本体に教える", "USB で ENTER"),
+                "stop": ("CPZから止める", "ENTER")}
+        return [rows[k] for k in self.SET_KEYS]
 
     def r_set(self):
         img, d = self.frame("設定", "↑↓ 項目 / ←→ ENTER 変える / ESC ホーム")
@@ -654,34 +662,48 @@ class App:
         if val in ("UP", "DOWN"):
             self.set_i = (self.set_i + (-1 if val == "UP" else 1)) % self.SET_ROWS
             return
-        i = self.set_i
+        key = self.SET_KEYS[self.set_i]
         dv = self.hub.st.get("dev") or {}
         cfg = dv.get("cfg") or {}
-        if i == 0 and val in ("LEFT", "RIGHT", "ENTER"):
+        hk = dv.get("hako") or {}
+        lr = val in ("LEFT", "RIGHT", "ENTER")
+        cfgcall = lambda body, msg: self.ask("設定", lambda: self.hub.call("POST", "/api/device/config", body), lambda r: self.toast(msg, 4))
+        if key == "bright" and lr:
             self.master = max(0, min(3, self.master + (-1 if val == "LEFT" else 1))) if val != "ENTER" else (self.master + 1) % 4
             v = MASTER[self.master]
             self.ask("明るさ", lambda: self.hub.call("POST", "/api/device/bright", {"value": v}))
-        elif i == 1 and val == "ENTER":
+        elif key == "rot" and val == "ENTER":
             self.ask("向き", lambda: self.hub.call("POST", "/api/device/rotate", {}),
                      lambda r: self.toast("向きを変えました (この傾きを覚えました)" if (r or {}).get("imu") == "ok" else "向きを変えました"))
-        elif i in (2, 3, 4) and val in ("LEFT", "RIGHT", "ENTER"):
-            k = ("autorot", "shake", "psave")[i - 2]
-            on = not cfg.get(k) if val == "ENTER" else val == "RIGHT"
+        elif key in ("autorot", "shake", "psave") and lr:
+            on = not cfg.get(key) if val == "ENTER" else val == "RIGHT"
             msg = {"autorot": "自動回転を入れました。いまの向きを覚えました。C長押しで直すと、その向きも覚えます" if on else "自動回転を切りました",
                    "shake": "振ると次の番組へ進みます" if on else "振っても何もしません",
-                   "psave": "消灯中は Wi-Fi を省電力にします" if on else "省電力を切りました"}[k]
-            self.ask("設定", lambda: self.hub.call("POST", "/api/device/config", {k: on}), lambda r: self.toast(msg, 4))
-        elif i == 5 and val in ("LEFT", "RIGHT", "ENTER"):
+                   "psave": "消灯中は Wi-Fi を省電力にします" if on else "省電力を切りました"}[key]
+            cfgcall({key: on}, msg)
+        elif key == "hako" and lr:
+            order = ["auto", "on", "off"]
+            cur = hk.get("set", "auto")
+            i = order.index(cur) if cur in order else 0
+            nxt = order[(i + (-1 if val == "LEFT" else 1)) % 3]
+            msg = {"auto": "USB を抜くと箱庭になります", "on": "いつも箱庭にします (USB をつないだまま試せます)", "off": "箱庭を使いません"}[nxt]
+            cfgcall({"hako": nxt}, msg)
+        elif key == "chg" and lr:
+            to = 180 if hk.get("chg") == 650 else 650
+            cfgcall({"chg": to}, "充電を 650mA にしました (18350×2 ベースの時だけ)" if to == 650 else "充電を 180mA にしました")
+        elif key == "hflip" and lr:
+            cfgcall({"hflip": not hk.get("hflip")}, "箱庭で傾けた時の左右を入れ替えました")
+        elif key == "ap" and lr:
             on = not (self.ap or {}).get("on") if val == "ENTER" else val == "RIGHT"
             def done(r):
                 self.ap = r; self.dirty = True
                 self.toast(f"イベントAP 入: {r.get('ssid')} (CPZ は家の Wi-Fi から外れます)" if r.get("on") else "イベントAP 切: 家の Wi-Fi に戻します", 5)
             self.ask("イベントAP", lambda: self.hub.call("POST", "/api/ap", {"on": on}, timeout=45), done,
                      start="切り替えています…")
-        elif i == 6 and val == "ENTER":
+        elif key == "teach" and val == "ENTER":
             self.ask("APを教える", lambda: self.hub.call("POST", "/api/ap/teach", {}, timeout=10),
                      lambda r: self.toast("本体に覚えさせました。家の Wi-Fi が無い所では15秒で CPZ につなぎます", 5))
-        elif i == 7 and val == "ENTER":
+        elif key == "stop" and val == "ENTER":
             self.stop()
 
     # ---- 結果を受け取る

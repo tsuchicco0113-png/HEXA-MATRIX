@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.6 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.10.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -52,6 +52,18 @@
 //   ・設定パケット CONFIG (0x07) "autorot=1;shake=0;psave=1"。本体に覚える。PING に imu / cfg / 電池 (batt/lvl/chg)
 //   ・2つ目の Wi-Fi (wifi.txt の ssid2= / pass2=、または USB から CONFIG "ssid2=..." "pass2=...")。
 //     1つ目に 15 秒つながらなければ 2つ目へ (イベントで CPZ をアクセスポイントにする時用)
+//
+//   v0.10.0: 箱庭 (HEXA CUBE、18350×2 ベースのキーチェーン)
+//   ・USB をつないでいない (電池) 時は「箱庭」: キャラが1体住んでいて、傾き・揺れ・ひっくり返し・叩く・振るに反応する
+//     (エンジンは hxm_char.h。絵1枚から まばたき・目線・歩く脚・着地・寝る・目が回る を作る)。Wi-Fi は切る
+//     USB をつなぐと今までの HEXA MATRIX に戻る。CONFIG hako=on/off/auto で固定もできる (開発用)
+//   ・ボタン: A なでる / C つつく (跳ねる) / B おやすみ (すぐ眠る) / B長押し 明るさ / C長押し 向き (吊るして正立に合わせる)
+//             A長押し キャラを真ん中に戻す
+//   ・キャラが寝てから deep 秒 (既定 90) で本体も眠る (deep sleep)。起きるのは
+//       ① ボタン ② 動かした: BMI270 の any-motion → PM1 GPIO4 → G2 (極性は imuhi で切替、実機で要確認)
+//       ③ 見回り: peek 秒 (既定 3) ごとに一瞬起きて BMI270 の「動いた」印を読み、動いていなければすぐ眠り直す
+//     眠る前のキャラの状態は RTC メモリに残し、起きたら続きから (起きた時はびっくりする)
+//   ・CONFIG chg=650 で充電 650mA (18350×2 用。既定 180)。plog=1 で microSD の /hexa/power.csv に電池の記録
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -61,10 +73,19 @@
 #include "hxm_xfer.h"
 #include "hxm_wifi.h"
 #include "hxm_orient.h"
+#include "hxm_char.h"
+#include <esp_sleep.h>
+#include <esp_idf_version.h>
+#include <soc/soc_caps.h>
+#include <Wire.h>
+#if __has_include(<driver/rtc_io.h>) && SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
+#include <driver/rtc_io.h>
+#define HXM_HAVE_RTCIO 1
+#endif
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.6";
+static const char* FW_VER = "0.10.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -95,6 +116,30 @@ static HxmOrient orient;
 static HxmShake  shaker;
 static float    lgx = 0, lgy = 0, lgz = 1; static bool lgInit = false;   // ならした重力
 static int      rotCand = -1; static uint32_t rotCandSince = 0;
+// 箱庭 (v0.10)
+enum : uint8_t { HAKO_AUTO = 0, HAKO_ON = 1, HAKO_OFF = 2 };
+static uint8_t  cfgHako = HAKO_AUTO;    // 自動 (USB なし=箱庭) / いつも箱庭 / 使わない
+static uint16_t cfgChg = 180;           // 充電電流 mA (180 / 650)
+static int8_t   cfgHflip = 1;           // 傾きの左右 (+1/-1)。キャラが逆に転がるなら hflip=1 で入れ替え
+static bool     cfgImuHigh = true;      // BMI270 INT1 の極性 (true=動いたら High)
+static uint16_t cfgPeek = 3;            // 本体が眠っている間、何秒ごとに見回るか
+static uint16_t cfgDeep = 90;           // キャラが寝てから、さらに何秒で本体も眠るか
+static uint16_t cfgAnyMg = 60;          // 「動いた」とみなす揺れ (mg)
+static bool     cfgPlog = false;        // 電池の記録 (/hexa/power.csv)
+static bool     hakoOn = false;
+static HxcWorld hako;
+static float    hakoDown0 = 90.f;       // 覚えた向きが無い時の「下」の傾き角
+static uint32_t hakoTickAt = 0, hakoSleepAt = 0, hakoLogAt = 0, hakoStartMs = 0;
+static uint8_t  hakoEv = 0;             // ボタンからキャラへの知らせ
+static float    hlx = 0, hly = 0, hlz = 1; static uint32_t tapCool = 0;
+static uint8_t  hakoLast[32];
+// deep sleep を越えて残る (LP メモリ)。合言葉が合わなければ最初から
+static const uint32_t HAKO_MAGIC = 0x48584331;   // 'HXC1'
+RTC_DATA_ATTR static uint32_t rtcMagic = 0;
+RTC_DATA_ATTR static uint8_t  rtcWorld[sizeof(HxcWorld)];
+RTC_DATA_ATTR static uint8_t  rtcSleeping = 0;
+RTC_DATA_ATTR static uint32_t rtcPeeks = 0, rtcSleeps = 0;
+RTC_DATA_ATTR static uint16_t rtcPeekSec = 3;          // 見回りの間隔 (M5.begin の前に使うので RTC に置く)
 // 省電力
 static uint32_t lastActivity = 0;      // 最後に何か届いた / ボタンが押された時刻
 static bool     wSleepPref = false;    // wifi.txt の sleep=on (いつも省電力)
@@ -225,11 +270,18 @@ static void sendStatus() {
   // v0.9.6: 向き・設定・電池・どちらの Wi-Fi か
   int16_t bv = M5.Power.getBatteryVoltage();     // mV。0=電池なし / -1=まだ分からない
   out->printf("\"imu\":\"%s\",\"learn\":%d,\"cfg\":{\"autorot\":%d,\"shake\":%d,\"psave\":%d},"
-              "\"batt\":%d,\"lvl\":%ld,\"chg\":%s,\"wnet\":%d,\"wsleep\":%d,\"ssid2\":%s}\n",
+              "\"batt\":%d,\"lvl\":%ld,\"chg\":%s,\"wnet\":%d,\"wsleep\":%d,\"ssid2\":%s,",
               imuOk ? "ok" : "none", orient.known(), cfgAutoRot ? 1 : 0, cfgShake ? 1 : 0, cfgPsave ? 1 : 0,
               (int)bv, (long)(bv > 0 ? M5.Power.getBatteryLevel() : -1), (bv > 0 && M5.Power.isCharging()) ? "true" : "false",
               (wifiOn && WiFi.status() == WL_CONNECTED) ? wIdx + 1 : 0, wSleepNow ? 1 : 0,
               wSsid[1].length() ? "true" : "false");
+  // v0.10: 箱庭
+  out->printf("\"mode\":\"%s\",\"vbus\":%d,\"hako\":{\"set\":\"%s\",\"st\":%d,\"q\":%d,\"chg\":%u,\"hflip\":%d,"
+              "\"imuhi\":%d,\"peek\":%u,\"deep\":%u,\"anymg\":%u,\"plog\":%d,\"peeks\":%lu,\"sleeps\":%lu}}\n",
+              hakoOn ? "hako" : "home", (int)M5.Power.getVBUSVoltage(),
+              cfgHako == HAKO_ON ? "on" : cfgHako == HAKO_OFF ? "off" : "auto", hakoOn ? (int)hako.st : -1, (int)hako.q,
+              cfgChg, cfgHflip < 0 ? 1 : 0, cfgImuHigh ? 1 : 0, cfgPeek, cfgDeep, cfgAnyMg, cfgPlog ? 1 : 0,
+              (unsigned long)rtcPeeks, (unsigned long)rtcSleeps);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -679,6 +731,7 @@ static void imuTick(uint32_t now) {
 }
 
 // ---------------------------------------------------------------- 設定 (CONFIG 0x07)
+static void hakoReset();
 static bool cfgFlag(const char* v) { return v[0] == '1' || (v[0] == 'o' && v[1] == 'n') || v[0] == 't'; }
 /// "autorot=1;shake=0;psave=1" / "rotreset=1"。"ssid2=" "pass2=" は USB からだけ、1パケットに1つ (値に ; を含めてよい)
 static void handleConfig() {
@@ -707,6 +760,18 @@ static void handleConfig() {
       else if (!strcmp(k, "psave")) { cfgPsave = on; prefs.putBool("cps", on); }
       else if (!strcmp(k, "rotreset")) { if (on) { orient.clear(); saveOrient(); } }
       else if (!strcmp(k, "rotlearn")) { if (on && !learnRot()) bad = true; }
+      // v0.10 箱庭
+      else if (!strcmp(k, "hako")) {
+        cfgHako = !strcmp(v, "auto") || v[0] == 'a' ? HAKO_AUTO : on ? HAKO_ON : HAKO_OFF; prefs.putUChar("hko", cfgHako);
+      }
+      else if (!strcmp(k, "chg")) { cfgChg = atoi(v) >= 650 ? 650 : 180; prefs.putUShort("chg", cfgChg); M5.Power.setChargeCurrent(cfgChg); }
+      else if (!strcmp(k, "hflip")) { cfgHflip = on ? -1 : 1; prefs.putChar("hfl", cfgHflip); }
+      else if (!strcmp(k, "imuhi")) { cfgImuHigh = on; prefs.putBool("ihi", on); }
+      else if (!strcmp(k, "peek")) { int n = atoi(v); cfgPeek = (uint16_t)(n < 1 ? 1 : n > 60 ? 60 : n); prefs.putUShort("pek", cfgPeek); }
+      else if (!strcmp(k, "deep")) { int n = atoi(v); cfgDeep = (uint16_t)(n < 10 ? 10 : n > 3600 ? 3600 : n); prefs.putUShort("dep", cfgDeep); }
+      else if (!strcmp(k, "anymg")) { int n = atoi(v); cfgAnyMg = (uint16_t)(n < 20 ? 20 : n > 500 ? 500 : n); prefs.putUShort("amg", cfgAnyMg); }
+      else if (!strcmp(k, "plog")) { cfgPlog = on; prefs.putBool("plg", on); }
+      else if (!strcmp(k, "hakoreset")) { if (on) { rtcMagic = 0; if (hakoOn) hakoReset(); } }
       else bad = true;
     } else if (*p) bad = true;
     p = e ? e + 1 : nullptr;
@@ -759,6 +824,176 @@ static void handlePacket() {
   }
 }
 
+// ---------------------------------------------------------------- 箱庭 (v0.10)
+static bool usbPower() { int16_t v = M5.Power.getVBUSVoltage(); return v > 4000; }   // -1 (読めない) は電池扱い
+static void hakoReset() {
+  HxcSprite sp; sp.parse(HXC_BUILTIN, HXC_BUILTIN_H);
+  HxcParams pr;
+  hako.init(sp, pr, esp_random());
+}
+// BMI270 を直接 (M5Unified に無い any-motion の設定)
+static const uint8_t BMI = 0x68;
+static bool    bmiW(uint8_t r, uint8_t v) { return M5.In_I2C.writeRegister8(BMI, r, v, 400000); }
+static uint8_t bmiR(uint8_t r) { return M5.In_I2C.readRegister8(BMI, r, 400000); }
+/// 眠る前: 「動いたら INT1 を出す (ラッチ)」にして、加速度だけ低消費で動かし続ける
+static void imuArmWake() {
+  if (!imuOk) return;
+  bmiW(0x7C, 0x00); delayMicroseconds(600);              // PWR_CONF: 設定の間は省電力を切る
+  uint16_t thr = (uint16_t)((uint32_t)cfgAnyMg * 2048 / 1000); if (thr > 0x7FF) thr = 0x7FF;
+  uint8_t d[4] = { 0x05, 0xE0,                              // ANYMO_1: 5 サンプル (100ms)、xyz
+                   (uint8_t)(thr & 0xFF), (uint8_t)(0x80 | (0x07 << 3) | ((thr >> 8) & 0x07)) };   // ANYMO_2: 有効、出力 bit6、しきい値
+  bmiW(0x2F, 1);                                          // FEAT_PAGE 1
+  M5.In_I2C.writeRegister(BMI, 0x3C, d, 4, 400000);
+  bmiW(0x2F, 0);
+  bmiW(0x53, (uint8_t)((1 << 3) | (cfgImuHigh ? (1 << 1) : 0)));   // INT1: 出力、プッシュプル、極性
+  bmiW(0x55, 0x01);                                       // INT_LATCH: 読むまで保つ
+  bmiW(0x56, (uint8_t)(bmiR(0x56) | 0x40));               // INT1_MAP_FEAT: any_motion
+  bmiW(0x40, 0x17);                                       // ACC_CONF: 50Hz、平均、低消費
+  bmiW(0x7D, 0x04);                                       // PWR_CTRL: 加速度だけ
+  (void)bmiR(0x1C);                                       // INT_STATUS_0 を読んで空にする
+  bmiW(0x7C, 0x01);                                       // PWR_CONF: 省電力
+}
+/// PM1: キー (GPIO0〜2) と IMU (GPIO4) の割り込みを通す (GPIO3 は IRQ 出力そのものなので止める)
+static void pm1ArmWake() {
+  M5.Power.M5pm1.clearIRQStatus();
+  M5.Power.M5pm1.setGPIOIRQMaskBits(0x08);
+}
+static void hakoSave() { memcpy(rtcWorld, &hako, sizeof hako); rtcMagic = HAKO_MAGIC; }
+static void hakoDeepSleep() {
+  hakoSave(); rtcSleeping = 1; rtcSleeps++; rtcPeekSec = cfgPeek;
+  memset(frame, 0, sizeof frame); drawFrame();
+  imuArmWake();
+  pm1ArmWake();
+  if (FSYS == &SD) SD.end();
+  ioe1Out(IOE_TF_EN, false);                              // microSD の電源
+  Serial.flush();
+  M5.Power.deepSleep((uint64_t)cfgPeek * 1000000ULL, true);   // 見回りのタイマー + G2 (PM1 の IRQ)
+}
+static void hakoStart(bool resume) {
+  hakoOn = true;
+  if (wifiOn) { if (client) client.stop(); MDNS.end(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+  wifiOn = serverUp = mdnsUp = wifiShown = false; wSleepNow = false;
+  if (pf) pf.close();
+  live = false; clipMode = false; paused = true;
+  if (up.active) abortUpload();
+  if (resume && rtcMagic == HAKO_MAGIC) { memcpy(&hako, rtcWorld, sizeof hako); hako.enter(HXC_WAKE); hako.wakeT = 40; hako.still = 0; }
+  else hakoReset();
+  float d;
+  if (!orient.expect(rot, &d) && !learnRot()) {           // 向きを覚えていなければ、いまの傾きを「下」とする
+    float ax, ay, az, a; M5.Imu.update();
+    if (M5.Imu.getAccel(&ax, &ay, &az) && hxm_tilt(ax, ay, az, &a)) hakoDown0 = a;
+  }
+  if (imuOk && resume && rtcSleeping) {                   // 眠る前に変えた BMI270 (低消費・ジャイロ停止・INT1) を元に戻す
+    bmiW(0x56, (uint8_t)(bmiR(0x56) & ~0x40)); bmiW(0x55, 0x00); (void)bmiR(0x1C);
+    M5.Imu.begin(&M5.In_I2C, M5.getBoard());
+  }
+  rtcSleeping = 0; hakoSleepAt = 0;
+  hakoTickAt = hakoStartMs = lastActivity = millis();
+  memset(hakoLast, 0xFF, sizeof hakoLast);
+}
+static void hakoStop() {
+  hakoOn = false; hakoSave();
+  memset(frame, 0, sizeof frame);
+  goIdle();
+  setOut(MASTER_LV[masterIdx]);
+  wifiSetup();
+  flashText("H", 400);
+}
+/// IMU → 画面の向きの加速度 (mg)。叩いた・振ったも見つける
+static bool hakoInput(HxcIn& in, uint32_t now) {
+  if (!imuOk) { in.gx = 0; in.gy = 1000; return true; }  // IMU が無ければ下向きの重力だけ
+  float ax, ay, az, wx = 0, wy = 0, wz = 0;
+  M5.Imu.update();
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return false;
+  M5.Imu.getGyro(&wx, &wy, &wz);
+  float d0;
+  if (!orient.expect(rot, &d0)) d0 = hakoDown0;
+  float rel = (atan2f(ay, ax) * 57.2957795f - d0) * 0.0174532925f;
+  float h = sqrtf(ax * ax + ay * ay);
+  auto c16 = [](float v) -> int16_t { return (int16_t)(v > 4000 ? 4000 : v < -4000 ? -4000 : v); };
+  in.gy = c16(h * cosf(rel) * 1000.f);
+  in.gx = c16(cfgHflip * h * sinf(rel) * 1000.f);
+  in.gz = c16(az * 1000.f);
+  in.wz = c16(cfgHflip * wz);
+  in.ev = hakoEv; hakoEv = 0;
+  float mag = sqrtf(ax * ax + ay * ay + az * az);
+  float jx = ax - hlx, jy = ay - hly, jz = az - hlz;
+  hlx += 0.15f * jx; hly += 0.15f * jy; hlz += 0.15f * jz;
+  if (shaker.feed(mag, now)) in.ev |= HXC_SHAKE;
+  else if (sqrtf(jx * jx + jy * jy + jz * jz) > 1.1f && (int32_t)(now - tapCool) >= 0) { in.ev |= HXC_TAP; tapCool = now + 400; }
+  if (in.ev || fabsf(mag - 1.f) > 0.08f) lastActivity = now;
+  return true;
+}
+static void hakoLog(uint32_t now) {
+  if (!cfgPlog || FSYS != &SD || (int32_t)(now - hakoLogAt) < 60000) return;
+  hakoLogAt = now;
+  File f = SD.open("/hexa/power.csv", FILE_APPEND);
+  if (!f) return;
+  if (f.size() == 0) f.println("sec,batt_mV,lvl,state,bright,sleeps,peeks");
+  f.printf("%lu,%d,%ld,%d,%d,%lu,%lu\n", (unsigned long)((now - hakoStartMs) / 1000), (int)M5.Power.getBatteryVoltage(),
+           (long)M5.Power.getBatteryLevel(), (int)hako.st, outBri, (unsigned long)rtcSleeps, (unsigned long)rtcPeeks);
+  f.close();
+}
+static void hakoLoop(uint32_t now) {
+  int n = 0;
+  while ((int32_t)(now - hakoTickAt) >= 16 && n < 4) {    // 60Hz (遅れたら最大4回分だけ追いかける)
+    hakoTickAt += 16; n++;
+    HxcIn in;
+    if (hakoInput(in, now)) hako.step(in);
+  }
+  if ((int32_t)(now - hakoTickAt) > 100) hakoTickAt = now;
+  uint8_t f[32]; hako.render(f);
+  int bri = hako.sleeping() ? MASTER_LV[0] / 2 : MASTER_LV[masterIdx];   // 寝ている時は暗く
+  static uint32_t lastDraw = 0;
+  if ((memcmp(f, hakoLast, 32) || bri != outBri || now - lastDraw > 200) && (int32_t)(now - holdUntil) >= 0) {
+    memcpy(hakoLast, f, 32); memcpy(frame, f, 32);
+    setOut(bri); drawFrame(); lastDraw = now;
+  }
+  // キャラが寝て deep 秒たったら本体も眠る (USB につないでいる時は眠らない)
+  if (hako.sleeping() && !usbPower()) {
+    if (!hakoSleepAt) hakoSleepAt = now;
+    else if ((int32_t)(now - hakoSleepAt) > (int32_t)cfgDeep * 1000) hakoDeepSleep();
+  } else hakoSleepAt = 0;
+  hakoLog(now);
+}
+static void hakoButtons() {
+  if (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed()) lastActivity = millis();
+  if (M5.BtnA.wasClicked()) hakoEv |= HXC_PET;
+  if (M5.BtnC.wasClicked()) hakoEv |= HXC_POKE;
+  if (M5.BtnA.wasHold()) { hakoReset(); flashText("*", 300); }
+  if (M5.BtnB.wasClicked()) {                              // おやすみ
+    if (usbPower()) { hako.still = hako.pr.sleepAfter + 1; hako.enter(HXC_SLEEP); }
+    else hakoDeepSleep();
+  }
+  if (M5.BtnB.wasHold()) {
+    masterIdx = (masterIdx + 1) & 3; prefs.putUChar("mst", masterIdx);
+    char b[4]; snprintf(b, sizeof b, "B%d", masterIdx + 1); flashText(b, 600);
+  }
+  if (M5.BtnC.wasHold()) { setRot((uint8_t)(rot + 1), true); flashText("^", 500); }   // 吊るして正立に合わせる (傾きも覚える)
+}
+/// 見回り起床: M5.begin の前に、BMI270 の「動いた」印だけ読んで、動いていなければすぐ眠り直す
+static void hakoPeek() {
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER || !rtcSleeping || rtcMagic != HAKO_MAGIC) return;
+  Wire.begin(0, 1, 400000);                                // 内部 I2C (SDA=G0, SCL=G1)
+  Wire.beginTransmission(BMI); Wire.write(0x1C);
+  uint8_t st = 0;
+  if (Wire.endTransmission(false) == 0 && Wire.requestFrom((int)BMI, 1) == 1) st = Wire.read();
+  else st = 0x40;                                          // 読めなければ起きる (安全側)
+  if (st & 0x40) { Wire.end(); return; }                   // 動いた → 普通に起きる (眠り中の印は setup の最後で消す)
+  rtcPeeks++;
+  Wire.end();
+  esp_sleep_enable_timer_wakeup((uint64_t)(rtcPeekSec ? rtcPeekSec : 3) * 1000000ULL);
+#ifdef HXM_HAVE_RTCIO
+#if defined(ESP_IDF_VERSION_VAL) && ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
+  esp_sleep_enable_ext1_wakeup_io(1ULL << 2, ESP_EXT1_WAKEUP_ANY_LOW);
+#else
+  esp_sleep_enable_ext1_wakeup(1ULL << 2, ESP_EXT1_WAKEUP_ANY_LOW);
+#endif
+  rtc_gpio_pullup_en(GPIO_NUM_2); rtc_gpio_pulldown_dis(GPIO_NUM_2);
+#endif
+  esp_deep_sleep_start();
+}
+
 // ---------------------------------------------------------------- ボタン
 static void buttons() {
   if (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed()) lastActivity = millis();
@@ -782,6 +1017,7 @@ static void buttons() {
 }
 
 void setup() {
+  hakoPeek();                            // v0.10: 見回りで起きただけなら、ここで眠り直す (M5.begin より前)
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;
   Serial.setRxBufferSize(USB_RX_BUF);    // v0.9.5: begin より前に (UART の Serial だと begin の後では変えられない)
@@ -795,6 +1031,17 @@ void setup() {
   cfgPsave   = prefs.getBool("cps", true);
   imuOk = M5.Imu.isEnabled();
   loadOrient();
+  cfgHako    = prefs.getUChar("hko", HAKO_AUTO);
+  cfgChg     = prefs.getUShort("chg", 180);
+  cfgHflip   = prefs.getChar("hfl", 1) < 0 ? -1 : 1;
+  cfgImuHigh = prefs.getBool("ihi", true);
+  cfgPeek    = prefs.getUShort("pek", 3);
+  cfgDeep    = prefs.getUShort("dep", 90);
+  cfgAnyMg   = prefs.getUShort("amg", 60);
+  cfgPlog    = prefs.getBool("plg", false);
+  M5.Power.setChargeCurrent(cfgChg);
+  // 眠りから起きた / 電池で起動した → 箱庭から (Wi-Fi をつながずに)
+  bool wantHako = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower());
   M5.BtnA.setHoldThresh(800); M5.BtnB.setHoldThresh(800); M5.BtnC.setHoldThresh(800);
   M5.Display.setColorDepth(8);
   M5.Display.setRotation(rot);
@@ -802,15 +1049,19 @@ void setup() {
   detIn     = prefs.getChar("detIn", -1);
   cardDet = readCardDet();
   mountStorage();
-  if (sdBad) { flashText("SD", 1500); delay(1500); }   // カードが読めない (FAT32 にしてください)
-  wifiSetup();
-  goIdle();                              // 起動時は流さない (B で再生)
+  if (sdBad && !wantHako) { flashText("SD", 1500); delay(1500); }   // カードが読めない (FAT32 にしてください)
+  if (wantHako) { goIdle(); hakoStart(rtcSleeping || esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED); }
+  else {
+    wifiSetup();
+    goIdle();                            // 起動時は流さない (B で再生)
+  }
+  rtcSleeping = 0;
   sendStatus();
 }
 
 void loop() {
   M5.update();
-  buttons();
+  if (hakoOn) hakoButtons(); else buttons();
 
   while (Serial.available() > 0) {
     feedByte(usbParser, &Serial, (uint8_t)Serial.read());
@@ -818,6 +1069,20 @@ void loop() {
   }
   uint32_t now = millis();
   if (!usbParser.idle() && (int32_t)(now - lastByteMs) > 300) usbParser.reset();   // 途切れたパケットは捨てる
+  // v0.10: USB の有無 (1秒ごと) で 箱庭 ⇔ いつもの表示機
+  static uint32_t lastMode = 0;
+  if ((int32_t)(now - lastMode) > 1000) {
+    lastMode = now;
+    bool want = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower());
+    if (want && !hakoOn && !up.active) hakoStart(true);
+    else if (!want && hakoOn) hakoStop();
+  }
+  if (hakoOn) {
+    hakoLoop(now);
+    if (needRestore && (int32_t)(now - holdUntil) >= 0) needRestore = false;
+    delay(hako.sleeping() ? 6 : 1);
+    return;
+  }
   netTick(now);
   // v0.9.3: Wi-Fi で受けた分は netTick の中で millis() を記録するので、now を取り直す。
   //   以前は古い now から引き算して負 (=符号なしで巨大) になり、Wi-Fi で受けた直後に

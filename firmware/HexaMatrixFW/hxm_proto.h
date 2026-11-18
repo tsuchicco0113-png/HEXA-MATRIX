@@ -17,6 +17,8 @@
 //                             rotreset=1 覚えた向きを忘れる / rotlearn=1 いまの向きを覚え直す
 //                             "ssid2=名前" "pass2=パスワード" (1パケットに1つ、USB からだけ) 2つ目の Wi-Fi
 //                             返事は PING と同じ (cfg / imu / learn / batt / lvl / chg / wnet / ssid2)。だめなら "bad config"
+//                             v0.10 箱庭: hako=auto/on/off  chg=180/650  hflip=0/1  imuhi=0/1  peek=秒  deep=秒
+//                                         anymg=mg  plog=0/1  hakoreset=1。PING に "mode" (home/hako)・"vbus"・"hako":{…}
 //   ---- 単体再生 (v0.3) ----
 //        0x10 FILE_BEGIN len=4+n  u32 全体の大きさ + ファイル名 (英数字 _ - . のみ)
 //        0x11 FILE_DATA  len=2+n  u16 通し番号 + 中身 (n は 200 まで)

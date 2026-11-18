@@ -27,9 +27,10 @@ def crc8(d):
 LOSE = int(sys.argv[sys.argv.index("--lose") + 1]) if "--lose" in sys.argv else 0   # 最初の N 回の BEGIN を黙って捨てる
 DELAY = float(sys.argv[sys.argv.index("--delay") + 1]) / 1000 if "--delay" in sys.argv else 0   # 返事の遅れ (Wi-Fi のまね)
 def arg(k, d): return sys.argv[sys.argv.index(k) + 1] if k in sys.argv else d
-FW = arg("--fw", "0.9.6"); WIN = int(arg("--win", "16")); RTT = float(arg("--rtt", "0")) / 1000
+FW = arg("--fw", "0.10.0"); WIN = int(arg("--win", "16")); RTT = float(arg("--rtt", "0")) / 1000
 BUSY = int(arg("--busy", "0")); KEY = arg("--key", ""); authed = not KEY
 CFG = {"autorot": 0, "shake": 0, "psave": 1}; SSID2 = [""]; LEARN = [0]
+HAKO = {"set": "auto", "chg": 180, "hflip": 0, "imuhi": 1, "peek": 3, "deep": 90, "anymg": 60, "plog": 0}
 Q = []; stats_q = {"max": 0, "data": 0}       # 遅らせて返す返事 (送る時刻, 中身)
 def fwv(): return tuple(int(x) for x in FW.split("."))
 def out(j):
@@ -50,7 +51,9 @@ def status(): out(dict({"ok": True, "dev": "corematrix", "fw": FW, "bri": liveBr
                    "net": {"begin": stats.get("begin", 0), "drop": stats.get("drop", 0)},
                    "auth": bool(KEY) and not authed, "maxq": stats_q["max"]}, **({"win": WIN} if WIN and fwv() >= (0, 9, 5) else {}),
                    **({"imu": "ok", "learn": LEARN[0], "cfg": dict(CFG), "batt": 3950, "lvl": 82, "chg": False,
-                       "wnet": 1 if TCP else 0, "wsleep": 0, "ssid2": bool(SSID2[0])} if fwv() >= (0, 9, 6) else {})))
+                       "wnet": 1 if TCP else 0, "wsleep": 0, "ssid2": bool(SSID2[0])} if fwv() >= (0, 9, 6) else {}),
+                   **({"mode": "hako" if HAKO["set"] == "on" else "home", "vbus": 5000,
+                       "hako": dict(HAKO, st=0, q=0, peeks=0, sleeps=0)} if fwv() >= (0, 10, 0) else {})))
 def names(): return sorted(FILES)
 def lst(): out({"ok": True, "list": True, "store": "sd", "sd": "ok", "free": 1000000, "cur": cur, "paused": paused,
                "files": [{"n": n, "s": len(FILES[n])} for n in names()]})
@@ -69,7 +72,11 @@ def handle(t, p):
         for it in txt.split(";"):
             k, _, v = it.partition("=")
             if k in CFG: CFG[k] = 1 if v[:1] in "1ot" else 0
-            elif k == "autorot": pass
+            elif k == "hako" and fwv() >= (0, 10, 0): HAKO["set"] = "auto" if v.startswith("a") else "on" if v[:1] in "1ot" else "off"
+            elif k == "chg" and fwv() >= (0, 10, 0): HAKO["chg"] = 650 if int(v) >= 650 else 180
+            elif k in ("hflip", "imuhi", "plog") and fwv() >= (0, 10, 0): HAKO[k] = 1 if v[:1] in "1ot" else 0
+            elif k in ("peek", "deep", "anymg") and fwv() >= (0, 10, 0): HAKO[k] = int(v)
+            elif k == "hakoreset": pass
             elif k == "rotreset": LEARN[0] = 0
             elif k == "rotlearn": LEARN[0] += 1
             else: return err("bad config")
