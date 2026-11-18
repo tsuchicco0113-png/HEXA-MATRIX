@@ -35,6 +35,14 @@ int main(){
   // 乱暴に揺らしても箱からはみ出さない・点の数は変わりすぎない
   { HxcWorld a=mk(5); srand(11); double ang=0; for(int i=0;i<20000;i++){ ang+= (rand()%200-100)/1000.0; HxcIn in; in.gx=(int)(1000*sin(ang))+rand()%600-300; in.gy=(int)(1000*cos(ang))+rand()%600-300; in.ev=(rand()%400==0)?HXC_TAP:(rand()%900==0)?HXC_SHAKE:0; a.step(in);
       int x=a.x>>8,y=a.y>>8; assert(x>=0&&y>=0&&x+a.bw()<=16&&y+a.bh()<=16); int n=lit(a); assert(n>=90&&n<=125); } puts("fuzz ok"); }
+  // 地形 (下2行) があっても、どの向きに回しても箱の中・地形にめり込まない (v0.11.2: 右を上げると消えた件)
+  { HxcWorld a=mk(); a.terrain[14]=a.terrain[15]=0xFFFF; a.fit(); assert(!a.solid(a.x>>8,a.y>>8,a.bw(),a.bh()));
+    const int G[6][2]={{0,1000},{-1000,0},{0,1000},{1000,0},{0,-1000},{0,1000}};
+    for(auto& g:G){ run(a,240,g[0],g[1]); int x=a.x>>8,y=a.y>>8; assert(x>=0&&y>=0&&x+a.bw()<=16&&y+a.bh()<=16); assert(!a.solid(x,y,a.bw(),a.bh())); }
+    srand(21); double ang=0; for(int i=0;i<20000;i++){ ang+=(rand()%200-100)/1000.0; HxcIn in; in.gx=(int)(1000*sin(ang)); in.gy=(int)(1000*cos(ang)); a.step(in);
+      int x=a.x>>8,y=a.y>>8; assert(x>=0&&y>=0&&x+a.bw()<=16&&y+a.bh()<=16&&!a.solid(x,y,a.bw(),a.bh())); }
+    // 入らない向き (地形で 12 行しか空いていない → 縦 14 にはなれない) には回らない
+    HxcWorld b=mk(); b.terrain[12]=b.terrain[13]=b.terrain[14]=b.terrain[15]=0xFFFF; b.fit(); run(b,240,-1000,0); assert(b.q==0); puts("terrain ok"); }
   // 重い設定でも、止まっている時に「着地」のまま固まらない
   { HxcWorld a=mk(); a.pr.grav=120; a.pr.bounce=0; a.pr.whim=0; int land=0; for(int i=0;i<300;i++){ HxcIn in; in.gy=1000; a.step(in); if(i>60) land+=a.st==HXC_LAND; } assert(land==0); puts("heavy ok"); }
   // .hxc: 書いて読むと同じ。壊れた物は読まない

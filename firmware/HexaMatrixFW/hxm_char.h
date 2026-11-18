@@ -155,17 +155,36 @@ struct HxcWorld {
   }
 
   /// 重力の向きが変わった: 箱の縦横を入れ替える (真ん中を保って、はみ出たら押し戻す)
-  void setQ(uint8_t nq) {
-    int cx = (int)(x >> 8) * 2 + bw(), cy = (int)(y >> 8) * 2 + bh();   // 中心 ×2
-    q = nq;
-    int nx = (cx - bw()) / 2, ny = (cy - bh()) / 2;
+  // (nx,ny) の近くで、地形にも箱の外にもかからない場所を探して置く。無ければ false (v0.11.2)
+  bool place(int nx, int ny) {
+    const int w = bw(), h = bh();
+    if (w > 16 || h > 16) return false;
     if (nx < 0) nx = 0; if (ny < 0) ny = 0;
-    if (nx + bw() > 16) nx = 16 - bw(); if (ny + bh() > 16) ny = 16 - bh();
-    for (int k = 0; k < 16 && solid(nx, ny, bw(), bh()); k++) {   // 地形に埋まったら重力と逆へ逃がす
-      int dx, dy; gdir(q, dx, dy); nx -= dx; ny -= dy;
+    if (nx + w > 16) nx = 16 - w; if (ny + h > 16) ny = 16 - h;
+    int dx, dy; gdir(q, dx, dy);
+    for (int d = 0; d <= 30; d++) {
+      for (int a = -d; a <= d; a++) {                  // 重力と逆向き (-dx,-dy) を先に試す
+        const int b = d - (a < 0 ? -a : a);
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+          if (b == 0 && sgn > 0) break;
+          // 重力の軸を o1、それと直角を o2
+          const int o1 = -sgn * b, o2 = a;
+          const int px = nx + (dx ? o1 * dx : o2), py = ny + (dy ? o1 * dy : o2);
+          if (!solid(px, py, w, h)) { x = (int32_t)px << 8; y = (int32_t)py << 8; return true; }
+        }
+      }
     }
-    x = (int32_t)nx << 8; y = (int32_t)ny << 8;
+    return false;
+  }
+  void fit() { place((int)(x >> 8), (int)(y >> 8)); }   // 地形を入れた後、埋まっていたら近くへ逃がす
+
+  bool setQ(uint8_t nq) {
+    int cx = (int)(x >> 8) * 2 + bw(), cy = (int)(y >> 8) * 2 + bh();   // 中心 ×2
+    const uint8_t oq = q; const int32_t ox = x, oy = y;
+    q = nq;
+    if (!place((cx - bw()) / 2, (cy - bh()) / 2)) { q = oq; x = ox; y = oy; return false; }   // 入らない向きには回らない
     vx = vy = 0;
+    return true;
   }
 
   void enter(HxcState s) { if (st != s) { st = s; stT = 0; } }
@@ -187,7 +206,7 @@ struct HxcWorld {
       if (abs16(ay) * 10 > abs16(ax) * 13) want = ay > 0 ? 0 : 2;
       else if (abs16(ax) * 10 > abs16(ay) * 13) want = ax < 0 ? 1 : 3;
     }
-    if (want != q) { if (want == qCand) { if (++qT >= 18) { setQ(want); qT = 0; enter(HXC_AIR); } } else { qCand = want; qT = 0; } }
+    if (want != q) { if (want == qCand) { if (++qT >= 18) { qT = 0; if (setQ(want)) enter(HXC_AIR); } } else { qCand = want; qT = 0; } }
     else qT = 0;
 
     // 寝ている: 動かされたら起きる

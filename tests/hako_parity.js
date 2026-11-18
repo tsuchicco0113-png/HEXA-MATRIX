@@ -12,6 +12,7 @@ function cases(){
     {name:"組み込み", sp:hxcSpriteFromLines(HXC_BUILTIN_ROWS), p:{sleepAfter:900}, ter:new Array(16).fill(0)},
     {name:"小さい+地形", sp:small, p:{grav:40,bounce:150,whim:220,sleepAfter:200}, ter},
     {name:"6x6 すべり+慣性", sp:blob, p:{fric:8,stick:60,slosh:40,maxv:220,jump:300,sleepAfter:600}, ter:new Array(16).fill(0)},
+    {name:"組み込み+床2行 (回すと地形にかかる)", sp:hxcSpriteFromLines(HXC_BUILTIN_ROWS), p:{sleepAfter:900}, ter:Array.from({length:16},(_,y)=>y>=14?0xFFFF:0)},
     {name:"重い・跳ねない", sp:hxcSpriteFromLines(HXC_BUILTIN_ROWS), p:{grav:120,bounce:0,whim:0,sleepAfter:90}, ter:new Array(16).fill(0)},
   ];
 }
@@ -32,7 +33,7 @@ for(const c of cases()){
   const p=Object.assign({},HXC_DEFAULT,c.p), file=hxcBake(c.sp,p,c.ter,c.name), hex=Buffer.from(file).toString("hex");
   const sd=(R()>>>0)||1, ins=inputs(16000);
   const cpp=execFileSync(BIN,{input:hex+"\n"+sd+"\n"+ins.join("\n")+"\n",maxBuffer:1<<26}).toString().trim().split("\n");
-  const pr=hxcParse(file), w=new HxcWorld(); w.init(pr.sp,pr.p,sd); w.terrain=pr.terrain.slice();
+  const pr=hxcParse(file), w=new HxcWorld(); w.init(pr.sp,pr.p,sd); w.terrain=pr.terrain.slice(); w.fit();
   let diff=-1;
   for(let i=0;i<ins.length;i++){
     const [gx,gy,gz,wz,ev]=ins[i].split(" ").map(Number); w.step({gx,gy,gz,wz,ev});

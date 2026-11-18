@@ -55,9 +55,7 @@ function resetSim(){
   hk.w=new HxcWorld();
   if(!sp){ return; }
   hk.w.init(sp,hk.p,hk.seed=(hk.seed*1103515245+12345)>>>0||1);
-  hk.w.terrain=terRows();
-  // 地形に埋まっていたら上へ逃がす
-  for(let k=0;k<16&&hk.w.solid(hk.w.x>>8,hk.w.y>>8,hk.w.bw(),hk.w.bh());k++) hk.w.y-=256;
+  hk.w.terrain=terRows(); hk.w.fit();   // 地形に埋まっていたら近くへ逃がす
 }
 function input(){
   if(hk.phone&&hk.phone.g) return {gx:hk.phone.g[0],gy:hk.phone.g[1],gz:hk.phone.g[2],wz:0};

@@ -95,7 +95,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.11.1";
+static const char* FW_VER = "0.11.2";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -539,7 +539,7 @@ static void handleFile() {
           hakoPreview = true;
           if (!hakoOn) hakoStart(false);
           else hakoKeepNet = true;
-          hako.init(sp, pr, esp_random()); memcpy(hako.terrain, ter, sizeof ter); hakoTemp = true;
+          hako.init(sp, pr, esp_random()); memcpy(hako.terrain, ter, sizeof ter); hako.fit(); hakoTemp = true;
           out->printf("{\"ok\":true,\"char\":\"%s\",\"try\":true}\n", nm);
           return;
         }
@@ -893,7 +893,7 @@ static void hakoLoadChar() {
   if (f) f.close();
 }
 static void hakoReset() {
-  if (hcOk) { hako.init(hcSp, hcPr, esp_random()); memcpy(hako.terrain, hcTer, sizeof hcTer); }
+  if (hcOk) { hako.init(hcSp, hcPr, esp_random()); memcpy(hako.terrain, hcTer, sizeof hcTer); hako.fit(); }
   else { HxcSprite sp; sp.parse(HXC_BUILTIN, HXC_BUILTIN_H); HxcParams pr; hako.init(sp, pr, esp_random()); memset(hako.terrain, 0, sizeof hako.terrain); }
   hakoTemp = false;
 }

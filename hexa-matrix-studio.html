@@ -2291,14 +2291,31 @@ class HxcWorld{
     return 0;
   }
   onFloor(){ const [dx,dy]=HxcWorld.gdir(this.q); return this.solid((this.x>>8)+dx,(this.y>>8)+dy,this.bw(),this.bh()); }
+  place(nx,ny){
+    const w=this.bw(), h=this.bh();
+    if(w>16||h>16) return false;
+    if(nx<0) nx=0; if(ny<0) ny=0;
+    if(nx+w>16) nx=16-w; if(ny+h>16) ny=16-h;
+    const [dx,dy]=HxcWorld.gdir(this.q);
+    for(let d=0;d<=30;d++) for(let a=-d;a<=d;a++){
+      const b=d-(a<0?-a:a);
+      for(let sgn=-1;sgn<=1;sgn+=2){
+        if(b===0&&sgn>0) break;
+        const o1=-sgn*b, o2=a;
+        const px=nx+(dx?o1*dx:o2), py=ny+(dy?o1*dy:o2);
+        if(!this.solid(px,py,w,h)){ this.x=px<<8; this.y=py<<8; return true; }
+      }
+    }
+    return false;
+  }
+  fit(){ this.place(this.x>>8,this.y>>8); }
   setQ(nq){
     const cx=(this.x>>8)*2+this.bw(), cy=(this.y>>8)*2+this.bh();
+    const oq=this.q, ox=this.x, oy=this.y;
     this.q=nq;
-    let nx=idiv(cx-this.bw(),2), ny=idiv(cy-this.bh(),2);
-    if(nx<0) nx=0; if(ny<0) ny=0;
-    if(nx+this.bw()>16) nx=16-this.bw(); if(ny+this.bh()>16) ny=16-this.bh();
-    for(let k=0;k<16&&this.solid(nx,ny,this.bw(),this.bh());k++){ const [dx,dy]=HxcWorld.gdir(this.q); nx-=dx; ny-=dy; }
-    this.x=nx<<8; this.y=ny<<8; this.vx=this.vy=0;
+    if(!this.place(idiv(cx-this.bw(),2),idiv(cy-this.bh(),2))){ this.q=oq; this.x=ox; this.y=oy; return false; }
+    this.vx=this.vy=0;
+    return true;
   }
   enter(s){ if(this.st!==s){ this.st=s; this.stT=0; } }
   step(inp){
@@ -2314,7 +2331,7 @@ class HxcWorld{
       if(Math.abs(ay)*10>Math.abs(ax)*13) want=ay>0?0:2;
       else if(Math.abs(ax)*10>Math.abs(ay)*13) want=ax<0?1:3;
     }
-    if(want!==this.q){ if(want===this.qCand){ this.qT=(this.qT+1)&0xFF; if(this.qT>=18){ this.setQ(want); this.qT=0; this.enter(HXC.AIR); } } else { this.qCand=want; this.qT=0; } }
+    if(want!==this.q){ if(want===this.qCand){ this.qT=(this.qT+1)&0xFF; if(this.qT>=18){ this.qT=0; if(this.setQ(want)) this.enter(HXC.AIR); } } else { this.qCand=want; this.qT=0; } }
     else this.qT=0;
     if(this.st===HXC.SLEEP){
       if(moving){ this.enter(HXC.WAKE); this.wakeT=30; this.kick(idiv(-pr.jump*2,3),0); }
@@ -2507,9 +2524,7 @@ function resetSim(){
   hk.w=new HxcWorld();
   if(!sp){ return; }
   hk.w.init(sp,hk.p,hk.seed=(hk.seed*1103515245+12345)>>>0||1);
-  hk.w.terrain=terRows();
-  // 地形に埋まっていたら上へ逃がす
-  for(let k=0;k<16&&hk.w.solid(hk.w.x>>8,hk.w.y>>8,hk.w.bw(),hk.w.bh());k++) hk.w.y-=256;
+  hk.w.terrain=terRows(); hk.w.fit();   // 地形に埋まっていたら近くへ逃がす
 }
 function input(){
   if(hk.phone&&hk.phone.g) return {gx:hk.phone.g[0],gy:hk.phone.g[1],gz:hk.phone.g[2],wz:0};
