@@ -11,9 +11,10 @@
 USB シリアルを開くのはこのプログラムだけ。STUDIO も本体アプリもここを通る。
 標準ライブラリだけで動く (シリアルは termios で直接開く)。
 
-usage: hmatrixd.py [--port 8090] [--dev /dev/ttyACM0] [--net hexamatrix.local] [--lib DIR]
+usage: hmatrixd.py [--port 8090] [--dev /dev/ttyACM0] [--net hexamatrix.local] [--lib DIR] [--key 合言葉]
 
 USB が無ければ Wi-Fi の CoreMatrix (ファーム v0.5〜、microSD の hexa/wifi.txt でつなぐ) を探す。
+wifi.txt に key= (合言葉、ファーム v0.9.4〜) を入れたら、ここにも --key か HMATRIX_KEY で同じものを渡す。
 """
 import argparse
 import base64
@@ -38,21 +39,30 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.9.3"
+VERSION = "0.9.5"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
 STUDIO_CANDIDATES = [os.path.join(HERE, "..", "hexa-matrix-studio.html"),
                      os.path.join(HERE, "hexa-matrix-studio.html")]
 
-T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH = 0x01, 0x02, 0x03, 0x04, 0x05
+T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH, T_AUTH = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
 T_BEGIN, T_DATA, T_END, T_LIST, T_DEL, T_PLAY = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15
 CHUNK = 200
+WIN_MAX = 16             # 返事を待たずに先へ送る DATA の数の上限 (本体が PING の "win" で教えてくれる、v0.9.5〜)
 KEEPALIVE = 1.0          # 同じ絵が長く続くとき、本体のライブ待ち(3秒)が切れないように送り直す間隔
 
 
 def log(*a):
     print(time.strftime("%H:%M:%S"), *a, flush=True)
+
+
+class DevError(RuntimeError):
+    """本体からのエラー。code に本体の err ("busy" など) を持つ"""
+
+    def __init__(self, msg, code=None):
+        super().__init__(msg)
+        self.code = code
 
 
 # ------------------------------------------------------------------ パケット
@@ -105,8 +115,11 @@ class Link:
     Wi-Fi でつないでいる間に USB が差されたら USB に切り替える。パケットはどちらも同じ。
     """
 
-    def __init__(self, dev=None, nets=None):
+    def __init__(self, dev=None, nets=None, key=""):
         self.fixed = dev
+        self.key = key or ""
+        self.auth_bad_until = 0.0     # 合言葉が違った → しばらくつなぎに行かない
+        self.auth_warned = False
         self.nets = [h.strip() for h in (nets or "").split(",") if h.strip() and h.strip() != "off"]
         self.fd = None
         self.sock = None
@@ -152,6 +165,8 @@ class Link:
         return True
 
     def _open_net(self, hosts=None):
+        if time.monotonic() < self.auth_bad_until:
+            return False
         for h in (hosts or self.nets):
             host, _, port = h.partition(":")
             try:
@@ -165,6 +180,8 @@ class Link:
             self.path = f"wifi {host}:{port or NET_PORT}"
             log("connected", self.path)
             self.last_rx = time.monotonic()
+            if self.key:                               # v0.9.4〜: 合言葉を先に通す (合言葉なしの本体は黙って OK を返す)
+                self.send(packet(T_AUTH, self.key.encode()[:32]))
             self.send(packet(T_PING))
             return True
         return False
@@ -242,8 +259,14 @@ class Link:
         except ValueError:
             j = None
         if isinstance(j, dict):
+            if j.get("ok") is False and j.get("err") == "auth" and self.kind == "wifi":
+                log("本体の合言葉と違います (wifi.txt の key= と --key / HMATRIX_KEY をそろえてください)。30秒待ちます")
+                self.auth_bad_until = time.monotonic() + 30
             if "fw" in j:
                 self.status = j
+                if j.get("auth") is True and not self.auth_warned:
+                    self.auth_warned = True
+                    log("本体に合言葉が設定されています。--key か HMATRIX_KEY で渡してください")
             if j.get("list"):
                 self.devlist = j
             with self.wait_lock:
@@ -295,7 +318,7 @@ class Link:
             self.forget(w)
             raise RuntimeError("本体から返事がありません")
         if w["err"]:
-            raise RuntimeError(ERR_TEXT.get(w["err"], w["err"]))
+            raise DevError(ERR_TEXT.get(w["err"], w["err"]), w["err"])
         return w["res"]
 
     def request(self, data, pred, timeout=3.0):
@@ -312,12 +335,23 @@ class Link:
         except ValueError:
             return False
 
+    def dev_win(self):
+        """返事を待たずに先へ送ってよい DATA の数。v0.9.5〜 は本体が PING の "win" で教えてくれる
+        (USB の受信バッファも広げてあるので USB でも使える)。それより前は Wi-Fi 8 / USB 1"""
+        try:
+            w = int(self.status.get("win") or 0)
+        except (TypeError, ValueError):
+            w = 0
+        if w > 0:
+            return max(1, min(WIN_MAX, w))
+        return 8 if self.kind == "wifi" else 1
+
     def transfer(self, name, data, progress=None, win=None):
         """FILE_BEGIN / DATA / END でファイルを送る。名前が @ で始まると本体はメモリに置いて流す (v0.6〜)
-        Wi-Fi では返事を待たずに数個先まで送る (往復の待ち時間で遅くならないように)。
-        USB は本体の受信バッファが小さいので1つずつ。"""
+        返事を待たずに数個先まで送る (往復の待ち時間で遅くならないように)。数は dev_win()。
+        win を渡すと、それと dev_win() の小さい方 (やり直しで減らす時)"""
         wifi = self.kind == "wifi"
-        win = win or (8 if wifi else 1)
+        win = min(win, self.dev_win()) if win else self.dev_win()
         tmo = 8 if wifi else 4        # Wi-Fi は無線の再送で数秒遅れることがある
         n = (len(data) + CHUNK - 1) // CHUNK
         step = "開始"
@@ -348,7 +382,7 @@ class Link:
             return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
                                 lambda j: "saved" in j or "clip" in j, tmo + 4)
         except RuntimeError as e:
-            raise RuntimeError(f"{e} ({step})") from None
+            raise DevError(f"{e} ({step}, 窓{win})", getattr(e, "code", None)) from None
 
     def diag(self):
         """本体の受け取りの記録を聞いて、ログ用の1行にする (v0.9.2 以上のファーム)"""
@@ -365,6 +399,8 @@ ERR_TEXT = {"no storage": "保存先がありません", "bad name": "ファイ�
             "rename failed": "名前を付けられません", "not found": "見つかりません",
             "upload timeout": "途中で止まりました", "no memory": "本体のメモリが足りません",
             "bad clip": "コマ列の形が違います",
+            "busy": "本体が別の受け取りの最中です (USB と Wi-Fi の両方から送っていませんか)",
+            "auth": "本体の合言葉と違います (wifi.txt の key= と --key / HMATRIX_KEY)",
             "unknown type": "本体のファームが古いです。v0.3.0 以上を書き込んでください"}
 
 
@@ -565,24 +601,38 @@ class Hub:
                 raise RuntimeError("いま別の番組を送っています")
             try:
                 self.player.stop()
-                # 失敗したら少し待ってやり直す。2回目からは1つずつ確かめながら送る (遅いが確実)
-                for attempt in (1, 2, 3):
+                # 失敗したら少し待ってやり直す。窓を 本体の数 → 4 → 1 と減らす (最後は遅いが確実)
+                # busy (本体がもう片方から受け取り中) は回線のせいではないので窓は減らさず、
+                # 本体が5秒で捨てるのを待つ (busy のやり直しは2回まで)
+                wins, wi, busy_left = (None, 4, 1), 0, 2
+                for attempt in range(1, 6):
+                    if wi >= len(wins):
+                        break
+                    win = wins[wi]
                     t0 = time.time()
                     try:
-                        self.link.transfer("@live" if loop else "@once", data, win=None if attempt == 1 else 1)
+                        self.link.transfer("@live" if loop else "@once", data, win=win)
                     except RuntimeError as e:
+                        code = getattr(e, "code", None)
                         log(f"clip try {attempt} failed via {self.link.kind}:", e)
+                        if code == "auth":
+                            raise
+                        if code == "busy" and busy_left > 0:
+                            busy_left -= 1
+                            time.sleep(2.5)
+                            continue
+                        wi += 1
                         log("  本体:", self.link.diag())
                         time.sleep(0.5)
                         continue
-                    log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind}")
+                    log(f"clip {name}: {len(data)}B {time.time() - t0:.2f}s via {self.link.kind} 窓{win or self.link.dev_win()}")
                     self.player.play(name, fr, loop, dur, clip=True)
                     return {"mode": "clip", "send_sec": round(time.time() - t0, 2)}
                 if self.link.kind == "wifi":
                     # v0.9.3: Wi-Fi で1コマずつ送ると届き方がばらついて点滅するので、それには落とさない
-                    log("clip failed 3 times via wifi")
+                    log("clip failed via wifi")
                     raise RuntimeError("Wi-Fi で本体に送れませんでした。もう一度押すか USB でつないでください")
-                log("clip failed 3 times, stream instead")
+                log("clip failed, stream instead")
             finally:
                 self.xfer_lock.release()
         self.player.play(name, fr, loop, dur)
@@ -636,8 +686,16 @@ class Hub:
             self.player.stop()
             time.sleep(0.12)
             t0 = time.time()
-            j = self.link.transfer(dn, data, lambda n: self.busy.__setitem__("done", n))
-            log(f"pushed {dn} {len(data)}B {time.time() - t0:.1f}s")
+            for attempt in (1, 2):
+                try:
+                    j = self.link.transfer(dn, data, lambda n: self.busy.__setitem__("done", n))
+                    break
+                except RuntimeError as e:
+                    if attempt == 2 or getattr(e, "code", None) != "busy":
+                        raise
+                    log("push: 本体が別の受け取りの最中なので待ってやり直します")
+                    time.sleep(2.5)
+            log(f"pushed {dn} {len(data)}B {time.time() - t0:.1f}s 窓{self.link.dev_win()}")
             try:
                 self.dev_list()
             except RuntimeError:
@@ -938,9 +996,11 @@ def main():
     ap.add_argument("--net", default=os.environ.get("HMATRIX_NET", "hexamatrix.local"),
                     help="USBが無い時につなぐ Wi-Fi の CoreMatrix (カンマ区切り、host[:port]。off で使わない)")
     ap.add_argument("--lib", default=os.environ.get("HMATRIX_LIB", DEF_LIB))
+    ap.add_argument("--key", default=os.environ.get("HMATRIX_KEY", ""),
+                    help="Wi-Fi の合言葉 (本体の wifi.txt の key= と同じもの。ファーム v0.9.4〜)")
     a = ap.parse_args()
     H.load_fonts()
-    HUB = Hub(Link(a.dev, a.net), a.lib)
+    HUB = Hub(Link(a.dev, a.net, a.key), a.lib)
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     srv.daemon_threads = True
     log(f"HEXA MATRIX hub {VERSION}  http://{local_ip()}:{a.port}/  library: {a.lib}")

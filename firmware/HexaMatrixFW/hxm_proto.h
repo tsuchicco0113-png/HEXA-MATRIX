@@ -8,6 +8,10 @@
 //        0x03 PING    len=0   状態を1行のJSONで返す
 //        0x04 ROTATE  len=1   向き 0〜3
 //        0x05 BENCH   len=0   描画速度を測って返す
+//        0x06 AUTH    len=n   合言葉 (v0.9.4)。wifi.txt に key= があると、Wi-Fi では
+//                             これが通るまで PING と AUTH 以外を "auth" で断る。USB は常に不要
+//                             OK → {"ok":true,"auth":true} / 違う → {"ok":false,"err":"auth"} を返して切る
+//                             PING の返事の "auth" が true なら、合言葉が必要 (まだ通っていない)
 //   ---- 単体再生 (v0.3) ----
 //        0x10 FILE_BEGIN len=4+n  u32 全体の大きさ + ファイル名 (英数字 _ - . のみ)
 //        0x11 FILE_DATA  len=2+n  u16 通し番号 + 中身 (n は 200 まで)
@@ -17,10 +21,17 @@
 //        0x15 PLAY       len=1    番組の番号 (0から)。0xFF は一時停止、0xFE は一時再生をやめて番組へ (v0.6)
 //   ---- 一時再生 (v0.6) ----
 //        FILE_BEGIN の名前を "@live" (くりかえし) / "@once" (1回) にすると、保存せずメモリに置いて流す
+//   ---- 取り合い (v0.9.4) ----
+//        受け取りは同時に1つだけ。USB と Wi-Fi の片方が受け取り中に、もう片方から FILE_BEGIN が来ると
+//        {"ok":false,"err":"busy"} を返す (5秒止まった受け取りは捨てられるので、その後なら通る)。
+//        もう片方からの FILE_DATA / FILE_END は黙って捨てる
+//   ---- まとめて送る (v0.9.5) ----
+//        PING の返事の "win" (16) 個までは、DATA の返事 (ack) を待たずに先へ送ってよい。
+//        "win" が無いファームは USB=1 / Wi-Fi=8 (v0.6〜) で送る
 #pragma once
 #include <stdint.h>
 
-enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05,
+enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06,
                  HXM_FILE_BEGIN = 0x10, HXM_FILE_DATA = 0x11, HXM_FILE_END = 0x12,
                  HXM_LIST = 0x13, HXM_DELETE = 0x14, HXM_PLAY = 0x15 };
 static const uint8_t HXM_MAX_PAYLOAD = 240;

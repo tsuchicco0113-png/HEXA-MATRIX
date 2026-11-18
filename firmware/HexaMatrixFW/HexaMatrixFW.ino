@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.3 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.5 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -31,6 +31,17 @@
 //
 //   起動時やカードを入れた時に「SD」と出たら、カードが読めていない (exFAT など)。
 //   FAT32 でフォーマットし直すと使える (一度読めたカードで「入っている」状態を覚える)。
+//
+//   v0.9.4:
+//   ・受け取りは同時に1つだけ。USB と Wi-Fi が同時に送ってきても、先に始めた方を守る ("busy")
+//   ・wifi.txt の key= で合言葉。Wi-Fi の相手は AUTH (0x06) を通すまで PING 以外できない
+//   ・wifi.txt が 1KB を超えても、書き戻しで後ろが消えないようにした
+//   ・一時再生の受け取り失敗で、流していた番組が頭に戻っていたのを直した
+//   ・同じ名前で上書きするときの空き容量の判定に、古いファイルの分を入れた
+//
+//   v0.9.5: まとめて送る
+//   ・USB の受信バッファを 256B → 4KB に広げた。ファイル転送の DATA を返事を待たずに 16 個先まで送っても溢れない
+//   ・PING の返事に "win":16 (送り側が返事を待たずに先へ送ってよい DATA の数)。ハブ / STUDIO はこれを見て窓を決める
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -42,11 +53,15 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.3";
+static const char* FW_VER = "0.9.5";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
 static const uint32_t LIVE_TIMEOUT_MS = 3000;
+// v0.9.5: 送り側が返事を待たずに先へ送ってよい DATA の数。DATA 1つは最大 4+202+1=207B なので
+//         16 個で約 3.3KB。USB の受信バッファ (USB_RX_BUF) と Wi-Fi の TCP 窓 (約 5.7KB) の両方に収まる
+static const int      XFER_WIN = 16;
+static const size_t   USB_RX_BUF = 4096;
 static const uint8_t  MASTER_LV[4] = {40, 100, 170, 255};
 
 // SD (CoreMatrix の資料より)
@@ -66,6 +81,9 @@ static WiFiClient client;
 static char     wName[32] = "hexamatrix";
 static bool     wifiOn = false, serverUp = false, mdnsUp = false, wifiShown = false;
 static uint32_t lastNetByte = 0;
+static char     wKey[33] = "";          // 合言葉 (空なら不要)
+static bool     netAuthed = false;      // いまの Wi-Fi の相手が合言葉を通したか
+static bool     netKick = false;        // 合言葉が違った → 読み終えたら切る
 // Wi-Fi の受け取りの記録 (v0.9.2: 転送がうまくいかない時の切り分け用。PING の返事の "net" に出す)
 static uint32_t netBytes = 0, netConns = 0, netDrop = 0, netBegin = 0, netData = 0, netEnd = 0;
 static Preferences prefs;
@@ -163,7 +181,7 @@ static void sendStatus() {
   out->printf("{\"ok\":true,\"dev\":\"corematrix\",\"fw\":\"%s\",\"bri\":%u,\"rot\":%u,"
                 "\"frames\":%lu,\"rx_ok\":%lu,\"rx_bad\":%lu,\"draw_us\":%lu,"
                 "\"store\":\"%s\",\"sd\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u,"
-                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s,"
+                "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s,\"auth\":%s,\"win\":%d,"
                 "\"net\":{\"rssi\":%d,\"sleep\":%d,\"conn\":%lu,\"bytes\":%lu,\"ok\":%lu,\"bad\":%lu,"
                 "\"begin\":%lu,\"data\":%lu,\"end\":%lu,\"drop\":%lu,\"up\":%d,\"got\":%lu}}\n",
                 FW_VER, liveBri, rot, (unsigned long)frames,
@@ -171,6 +189,7 @@ static void sendStatus() {
                 store, sdState(), nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1,
                 wifiState(), wifiOn && WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString().c_str() : "", wName,
                 clipMode ? "true" : "false",
+                (out == &client && wKey[0] && !netAuthed) ? "true" : "false", XFER_WIN,
                 wifiOn && WiFi.status() == WL_CONNECTED ? (int)WiFi.RSSI() : 0, (int)WiFi.getSleep(),
                 (unsigned long)netConns, (unsigned long)netBytes, (unsigned long)netParser.ok, (unsigned long)netParser.bad,
                 (unsigned long)netBegin, (unsigned long)netData, (unsigned long)netEnd, (unsigned long)netDrop,
@@ -293,11 +312,14 @@ static void abortUpload() {
   up.active = false; upRam = false;
 }
 static bool openProgram(int i, bool announce);
+static void goIdle();
 /// 受け取りをやめて、流していた番組に戻る
 static void failUpload(const char* e) {
   bool ram = upRam;
   abortUpload();
   if (!ram && !paused) openProgram(cur, false);     // メモリへの受け取りなら番組はそのまま
+  // メモリへの受け取りで一時再生を止めていて、ほかに何も出ていなければ、止まった絵を残さず消灯
+  if (ram && paused && !live && !clipMode) goIdle();
   sendErr(e);
 }
 /// 何も流さない状態 (消灯) にする。番組・ライブ・一時再生をすべて止める
@@ -333,9 +355,13 @@ static void clipTick() {
 }
 static void handleFile() {
   const uint8_t* b = pk->buf; uint8_t n = pk->len;
+  const bool fromNet = (out == &client);
+  // v0.9.4: 受け取り中に「もう片方」から来た受け取りのパケットは受け付けない (USB と Wi-Fi の取り合い)
+  const bool otherBusy = up.active && fromNet != upFromNet;
   switch (pk->type) {
     case HXM_FILE_BEGIN: {
-      if (out == &client) netBegin++;
+      if (fromNet) netBegin++;
+      if (otherBusy) { sendErr("busy"); return; }
       abortUpload();
       if (n >= 5 && b[4] == '@') {                // 一時再生: メモリに受け取る
         uint32_t sz = hxm_u32(b);
@@ -357,7 +383,13 @@ static void handleFile() {
       if (!FSYS) { sendErr("no storage"); return; }
       if (n < 5 || !hxm_safe_name(b + 4, n - 4, upName, sizeof upName)) { sendErr("bad name"); return; }
       uint32_t sz = hxm_u32(b);
-      if (sz < 8 || sz > freeBytes()) { sendErr("no space"); return; }
+      // 同じ名前があれば、それは上書きで消えるので空きに足す (v0.9.4)
+      uint64_t avail = freeBytes();
+      {
+        String path = String(DIR) + "/" + upName;
+        if (FSYS->exists(path)) { File o = FSYS->open(path, FILE_READ); if (o) { avail += o.size(); o.close(); } }
+      }
+      if (sz < 8 || sz > avail) { sendErr("no space"); return; }
       if (pf) pf.close();                         // 上書きに備えて手放す
       upf = FSYS->open(TMP, FILE_WRITE);
       if (!upf) { failUpload("open failed"); return; }
@@ -367,8 +399,8 @@ static void handleFile() {
     case HXM_FILE_DATA: {
       // 受け取りが始まっていない (前の受け取りを打ち切った後に遅れて届いた残り) は黙って捨てる。
       // ここでエラーを返すと、送り側の「次の」受け取りを失敗させてしまう (v0.9.1 で修正)
-      if (out == &client) netData++;
-      if (!up.active) { if (out == &client) netDrop++; return; }
+      if (fromNet) netData++;
+      if (!up.active || otherBusy) { if (fromNet) netDrop++; return; }
       if (n < 2) { sendErr("bad data"); return; }
       uint16_t s = hxm_u16(b);
       uint32_t off = up.got;
@@ -380,15 +412,17 @@ static void handleFile() {
       out->printf("{\"ok\":true,\"ack\":%u}\n", s);
       return; }
     case HXM_FILE_END: {
-      if (out == &client) netEnd++;
-      if (!up.active) { if (out == &client) netDrop++; return; }   // 同上
+      if (fromNet) netEnd++;
+      if (!up.active || otherBusy) { if (fromNet) netDrop++; return; }   // 同上
       if (n != 4) { sendErr("bad end"); return; }
       int r = up.finish(hxm_u32(b));
       if (upRam) {
-        upRam = false;
+        // v0.9.4: 失敗の時は upRam を立てたまま failUpload へ (先に下ろすと「ファイルの受け取り」と
+        //         見なされ、流していた番組を頭から開き直していた)
         if (r) { failUpload(r == 1 ? "size" : r == 2 ? "crc" : "not started"); return; }
+        upRam = false;
         int32_t cnt = hxm_check_header(clipBuf, up.size);
-        if (cnt < 0) { sendErr("bad clip"); return; }
+        if (cnt < 0) { if (paused && !live) goIdle(); sendErr("bad clip"); return; }
         clipCount = cnt; clipIdx = 0; clipLoop = upRamLoop;
         stopProgramForExternal();
         clipMode = true; live = false; holdUntil = 0; needRestore = false; nextAt = millis();
@@ -407,7 +441,8 @@ static void handleFile() {
       out->printf("{\"ok\":true,\"saved\":\"%s\",\"idx\":%d}\n", upName, idx);
       return; }
     case HXM_LIST:
-      if (readCardDet() != cardDet || !FSYS) { bool w = (FSYS == &SD); cardDet = readCardDet(); mountStorage(w); if (!paused) openProgram(cur, false); }
+      // 受け取り中はカードを付け直さない (書いている途中のファイルが壊れるので)
+      if (!up.active && (readCardDet() != cardDet || !FSYS)) { bool w = (FSYS == &SD); cardDet = readCardDet(); mountStorage(w); if (!paused) openProgram(cur, false); }
       sendList();
       return;
     case HXM_DELETE: {
@@ -437,11 +472,17 @@ static const char* WIFI_TXT = "/hexa/wifi.txt";
 /// microSD の wifi.txt を読む → 本体に覚えさせる → pass を ***** に書き換える → つなぐ
 static void wifiSetup() {
   String ssid = prefs.getString("wssid", ""), pass = prefs.getString("wpass", ""), nm = prefs.getString("wname", "hexamatrix");
+  String key = prefs.getString("wkey", "");
   if (FSYS == &SD && SD.exists(WIFI_TXT)) {
-    static char buf[1024], outb[1040];
+    static char buf[1024], outb[1024 + 16];
     File f = SD.open(WIFI_TXT, FILE_READ);
+    size_t fsz = f ? f.size() : 0;
     size_t n = f ? f.read((uint8_t*)buf, sizeof buf) : 0;
     if (f) f.close();
+    // v0.9.4: 1KB に入りきらない時は、途中で切れた最後の行を読まず、ファイルにも書き戻さない
+    //         (以前は読んだ 1KB だけで上書きしていて、後ろの行が消えていた)
+    const bool whole = (fsz <= sizeof buf);
+    if (!whole) { while (n > 0 && buf[n - 1] != '\n') n--; }
     HxmWifiCfg c;
     if (hxm_wifi_parse(buf, n, &c)) {
       if (!c.ssid[0]) { ssid = ""; pass = ""; }                    // ssid= が空 → Wi-Fi を使わない
@@ -450,10 +491,12 @@ static void wifiSetup() {
         ssid = c.ssid;
       }
       if (c.name[0]) nm = c.name;
+      if (c.hasKey && !c.keyMasked) key = c.key;                  // key= が空なら合言葉なし。***** なら覚えているもの
       if (c.sleep >= 0) prefs.putChar("wsleep", (int8_t)c.sleep);
       if (c.tx >= 0) prefs.putChar("wtx", (int8_t)c.tx);
       prefs.putString("wssid", ssid); prefs.putString("wpass", pass); prefs.putString("wname", nm);
-      size_t m = hxm_wifi_mask(buf, n, outb, sizeof outb);
+      prefs.putString("wkey", key);
+      size_t m = whole ? hxm_wifi_mask(buf, n, outb, sizeof outb) : 0;
       if (m) {
         File w = SD.open(WIFI_TXT, FILE_WRITE);
         if (w) { w.write((const uint8_t*)outb, m); w.close(); }
@@ -461,6 +504,7 @@ static void wifiSetup() {
     }
   }
   strlcpy(wName, nm.length() ? nm.c_str() : "hexamatrix", sizeof wName);
+  strlcpy(wKey, key.c_str(), sizeof wKey);
   if (!ssid.length()) { if (wifiOn) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); } wifiOn = false; return; }
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(wName);
@@ -488,6 +532,7 @@ static void netTick(uint32_t now) {
     if (nc) {                                        // 新しくつないできた方を使う (古い方は切る)
       if (client) client.stop();
       client = nc; client.setNoDelay(true); netParser.reset(); lastNetByte = now; netConns++;
+      netAuthed = (wKey[0] == 0); netKick = false;  // 合言葉が無ければ最初から通す
       if (up.active && upFromNet) abortUpload();   // つなぎ直したら前の受け取りは無効
     }
   } else if (mdnsUp) { MDNS.end(); mdnsUp = false; }
@@ -497,8 +542,14 @@ static void netTick(uint32_t now) {
       int r = client.read(b, n < (int)sizeof b ? n : (int)sizeof b);
       if (r <= 0) break;
       netBytes += r;
-      for (int i = 0; i < r; i++) feedByte(netParser, &client, b[i]);
+      for (int i = 0; i < r && !netKick; i++) feedByte(netParser, &client, b[i]);
       lastNetByte = millis();
+      if (netKick) break;
+    }
+    if (netKick) {                                   // 合言葉が違った相手は切る
+      netKick = false; client.stop(); netParser.reset();   // NoDelay なので返事は送られてから閉じる
+      if (up.active && upFromNet) abortUpload();
+      return;
     }
     // v0.9.2: TCP は途中が抜けない (遅れて必ず届く) ので、間が空いてもパケットを捨てない。
     //         以前は 0.3 秒で捨てていて、無線の再送で遅れたパケットが丸ごと消え、転送が止まっていた
@@ -519,8 +570,26 @@ static void bench() {
   if (pf) { pf.seek(8); pfIdx = 0; nextAt = millis(); }
 }
 
+/// 合言葉の照合 (長さが違っても最後まで比べる)
+static bool keyMatch(const uint8_t* p, uint8_t n) {
+  size_t kl = strlen(wKey);
+  uint8_t d = (n == kl) ? 0 : 1;
+  for (size_t i = 0; i < kl; i++) d |= (uint8_t)(wKey[i] ^ (i < n ? p[i] : 0));
+  return d == 0;
+}
+
 static void handlePacket() {
+  // v0.9.4: Wi-Fi の相手は、合言葉を通すまで PING と AUTH しか受け付けない (USB は常に通す)
+  if (out == &client && !netAuthed && pk->type != HXM_PING && pk->type != HXM_AUTH) {
+    if (pk->type != HXM_FRAME && pk->type != HXM_BRIGHT && pk->type != HXM_FILE_DATA) sendErr("auth");  // 連続で来る物には返さない
+    return;
+  }
   switch (pk->type) {
+    case HXM_AUTH:
+      if (out != &client || !wKey[0]) { out->println("{\"ok\":true,\"auth\":true}"); return; }   // USB / 合言葉なし
+      if (keyMatch(pk->buf, pk->len)) { netAuthed = true; out->println("{\"ok\":true,\"auth\":true}"); }
+      else { sendErr("auth"); netKick = true; }
+      return;
     case HXM_FRAME:
       if (pk->len != 32) { sendErr("frame len"); return; }
       memcpy(frame, pk->buf, 32);
@@ -568,6 +637,7 @@ static void buttons() {
 void setup() {
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;
+  Serial.setRxBufferSize(USB_RX_BUF);    // v0.9.5: begin より前に (UART の Serial だと begin の後では変えられない)
   M5.begin(cfg);
   prefs.begin("hexamatrix", false);
   rot       = prefs.getUChar("rot", rot) & 3;
@@ -606,6 +676,7 @@ void loop() {
   if (up.active && (int32_t)(now - upLastMs) > 5000) {      // 途中で止まった受け取りは黙って捨てる (送り側は自分で時間切れにしている)
     bool ram = upRam; abortUpload();
     if (!ram && !paused) openProgram(cur, false);
+    if (ram && paused && !live && !clipMode) goIdle();     // 止めた一時再生の絵を残さない
   }
   if (live && (int32_t)(now - lastLiveMs) > (int32_t)LIVE_TIMEOUT_MS) {                  // ライブが止んだら番組へ戻る (一時再生中ならそちらへ)
     live = false;

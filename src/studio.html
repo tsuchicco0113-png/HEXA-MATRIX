@@ -699,7 +699,7 @@ function setConn(on){
   $("cdot").classList.toggle("on",on); $("cstate").textContent=on?"接続中":"未接続";
   $("conn").textContent=on?"切断":"接続";
   for(const id of ["send","bri","rotDev"]) $(id).disabled=!on;
-  if(!on){ devList=null; devFw=""; for(const w of waiters){ clearTimeout(w.t); w.rej(new Error("切断されました")); } waiters=[]; devBusy=false; }
+  if(!on){ devList=null; devFw=""; devWin=0; for(const w of waiters){ clearTimeout(w.t); w.rej(new Error("切断されました")); } waiters=[]; devBusy=false; }
   if(typeof devRender==="function") devRender();
 }
 async function tx(bytes){ if(!writer) return false; try{ await writer.write(bytes); return true; }catch(e){ log("送信失敗: "+e.message,"err"); return false; } }
@@ -749,7 +749,7 @@ function onLine(ln){
     log("本体: ファーム"+j.fw+(j.store?" / 保存先 "+({sd:"microSD",flash:"本体メモリ",none:"なし"}[j.store]||j.store)+" "+j.n+"番組":"")
         +(j.wifi==="ok"?" / Wi-Fi "+j.name+".local "+j.ip:j.wifi==="connecting"?" / Wi-Fi 接続中":"")
         +(j.rx_ok!==undefined?" / 受信"+j.rx_ok+"件":"")+(j.rx_bad?" (壊れ"+j.rx_bad+"件)":""),"ok");
-    if(j.fw){ devFw=j.fw; devRender(); }
+    if(j.fw){ devFw=j.fw; devWin=j.win|0; devRender(); }
     if(fwOld()) log("本体のファームが v"+j.fw+" なので、本体の番組は使えません (v0.3.0 以上を書き込んでください)","err");
     return;
   }

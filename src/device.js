@@ -7,7 +7,9 @@ function crc32(u8){ let c=0xFFFFFFFF; for(let i=0;i<u8.length;i++) c=CRC_T[(c^u8
 const u32le=v=>[v&255,(v>>>8)&255,(v>>>16)&255,(v>>>24)&255];
 const ascii=s=>[...s].map(c=>c.charCodeAt(0));
 
-let waiters=[], devBusy=false, devList=null, devFw="";
+let waiters=[], devBusy=false, devList=null, devFw="", devWin=0;
+/// 返事を待たずに先へ送ってよい DATA の数。ファーム v0.9.5〜 は PING の "win" で教えてくれる。それより前は1つずつ
+const xferWin=()=>Math.max(1,Math.min(16,devWin||1));
 const fwOld=()=>!!devFw && devFw.localeCompare("0.3.0",undefined,{numeric:true})<0;
 /// 本体の返事 (1行JSON) を待つ。ok:false が来たらその内容で失敗にする
 function waitReply(pred,ms){
@@ -28,6 +30,8 @@ function errText(e){
     "seq":"順番が乱れました","too big":"大きさが合いません","crc":"中身が壊れました","size":"大きさが合いません",
     "open failed":"ファイルを作れません","write failed":"書き込めません","rename failed":"名前を付けられません",
     "not found":"見つかりません","upload timeout":"途中で止まりました",
+    "busy":"本体が別の受け取りの最中です (CPZ から Wi-Fi で送っていませんか)。少し待ってもう一度",
+    "auth":"本体の合言葉が必要です (Wi-Fi)","no memory":"本体のメモリが足りません","bad clip":"コマ列の形が違います",
     "unknown type":"本体のファームが古いです。v0.3.0 以上を書き込んでください"})[e]||e||"エラー";
 }
 /// 返事が送信より先に届いても取りこぼさないよう、待ちを先に登録してから送る
@@ -88,15 +92,22 @@ $("devSave").onclick=()=>devDo(async()=>{
   const bar=$("devBar"); bar.style.width="0%"; $("devProg").style.display="block";
   const t0=performance.now();
   await request(HXF.BEGIN,u32le(data.length).concat(ascii(name)),j=>j.ack==="begin",4000);
-  const CH=200;
-  for(let seq=0,off=0;off<data.length;seq++,off+=CH){
-    const chunk=[...data.subarray(off,off+CH)];
-    const s=seq&0xFFFF;
-    await request(HXF.DATA,[s&255,s>>8].concat(chunk),j=>j.ack===s,4000);
-    bar.style.width=Math.round(Math.min(1,(off+CH)/data.length)*100)+"%";
-  }
+  const CH=200, win=xferWin(), pend=[];
+  // v0.9.5: 返事を待たずに win 個先まで送る (USB の往復の待ちで遅くならないように)。古いファームは win=1
+  try{
+    for(let seq=0,off=0;off<data.length;seq++,off+=CH){
+      const chunk=[...data.subarray(off,off+CH)];
+      const s=seq&0xFFFF;
+      const p=request(HXF.DATA,[s&255,s>>8].concat(chunk),j=>j.ack===s,4000+win*500);
+      p.catch(()=>{});                               // 待つ前に失敗しても「未処理」にしない (後で await する)
+      pend.push(p);
+      if(pend.length>=win) await pend.shift();
+      bar.style.width=Math.round(Math.min(1,(off+CH)/data.length)*100)+"%";
+    }
+    while(pend.length) await pend.shift();
+  }finally{ pend.length=0; }
   const j=await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined,8000);
-  log("本体に保存しました: "+j.saved+" ("+(data.length/1024).toFixed(1)+"KB / "+((performance.now()-t0)/1000).toFixed(1)+"秒)","ok");
+  log("本体に保存しました: "+j.saved+" ("+(data.length/1024).toFixed(1)+"KB / "+((performance.now()-t0)/1000).toFixed(1)+"秒 / 窓"+win+")","ok");
   status("本体に保存しました。本体だけで流れます","ok");
   devList=await request(HXF.LIST,[],j=>j.list,4000);
   $("devName").value=suggestName();

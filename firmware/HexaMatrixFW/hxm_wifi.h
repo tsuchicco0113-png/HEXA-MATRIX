@@ -8,6 +8,8 @@
 //   ssid= を空にしておくと Wi-Fi を使わない (覚えた設定も消す)
 //   sleep=on    Wi-Fi の省電力を入れる (既定は off。v0.9.1 までは on。入れると受信が遅れ、転送が止まることがある)
 //   tx=11       送信の強さ (dBm, 2〜20)。既定は 15。下げると電流の山が小さくなる
+//   key=合言葉  (v0.9.4) Wi-Fi でつないできた相手に AUTH を求める。8文字以上を推奨 (32字まで)
+//               pass と同じく本体に覚えさせて ***** に書き換える。key= を空にすると合言葉なし
 #pragma once
 #include <stddef.h>
 #include <string.h>
@@ -16,9 +18,12 @@ struct HxmWifiCfg {
   char ssid[33];
   char pass[65];
   char name[32];
+  char key[33];
   bool hasSsid;       // ssid= の行がある
   bool hasPass;       // pass= の行がある
   bool passMasked;    // pass が ***** (書き換え済み)
+  bool hasKey;        // key= の行がある
+  bool keyMasked;     // key が ***** (書き換え済み)
   int  sleep;         // -1=書いてない / 0=off / 1=on
   int  tx;            // -1=書いてない / dBm
 };
@@ -67,6 +72,10 @@ static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
       c->hasPass = true; c->passMasked = hxm_all_stars(v, vn);
       size_t m = vn < 64 ? vn : 64; memcpy(c->pass, v, m); c->pass[m] = 0;
       if (c->passMasked) c->pass[0] = 0;
+    } else if (hxm_key_is(k, kn, "key")) {
+      c->hasKey = true; c->keyMasked = hxm_all_stars(v, vn);
+      size_t m = vn < 32 ? vn : 32; memcpy(c->key, v, m); c->key[m] = 0;
+      if (c->keyMasked) c->key[0] = 0;
     } else if (hxm_key_is(k, kn, "sleep")) {
       c->sleep = (vn >= 2 && (v[0] == 'o' || v[0] == 'O') && (v[1] == 'f' || v[1] == 'F')) || (vn == 1 && v[0] == '0') ? 0 : 1;
     } else if (hxm_key_is(k, kn, "tx")) {
@@ -86,18 +95,29 @@ static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
   return c->hasSsid;
 }
 
-/// pass= の値を ***** にした中身を out に作る。書き換える必要が無ければ 0 を返す
+/// pass= と key= の値を ***** にした中身を out に作る。書き換える必要が無ければ 0 を返す
+///   (それぞれ最初の1行だけ。行は前から順に見るので、範囲は前から並ぶ)
 static inline size_t hxm_wifi_mask(const char* t, size_t n, char* out, size_t cap) {
-  size_t vs = 0, ve = 0; bool found = false;
+  size_t vs[2], ve[2]; int cnt = 0; bool gotPass = false, gotKey = false;
   hxm_wifi_lines(t, n, [&](const char* k, size_t kn, const char* v, size_t vn, size_t, size_t, size_t vstart) {
-    if (!found && (hxm_key_is(k, kn, "pass") || hxm_key_is(k, kn, "password")) && !hxm_all_stars(v, vn) && vn > 0) {
-      found = true; vs = vstart; ve = vstart + vn;
+    if (vn == 0 || hxm_all_stars(v, vn)) return;
+    bool isPass = hxm_key_is(k, kn, "pass") || hxm_key_is(k, kn, "password");
+    bool isKey  = hxm_key_is(k, kn, "key");
+    if ((isPass && !gotPass) || (isKey && !gotKey)) {
+      if (isPass) gotPass = true; else gotKey = true;
+      vs[cnt] = vstart; ve[cnt] = vstart + vn; cnt++;
     }
   });
-  if (!found) return 0;
-  const char* M = "*****";
-  size_t total = vs + 5 + (n - ve);
+  if (cnt == 0) return 0;
+  size_t total = n;
+  for (int i = 0; i < cnt; i++) total = total - (ve[i] - vs[i]) + 5;
   if (total > cap) return 0;
-  memcpy(out, t, vs); memcpy(out + vs, M, 5); memcpy(out + vs + 5, t + ve, n - ve);
-  return total;
+  size_t src = 0, o = 0;
+  for (int i = 0; i < cnt; i++) {
+    memcpy(out + o, t + src, vs[i] - src); o += vs[i] - src;
+    memcpy(out + o, "*****", 5); o += 5;
+    src = ve[i];
+  }
+  memcpy(out + o, t + src, n - src); o += n - src;
+  return o;
 }
