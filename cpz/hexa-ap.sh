@@ -9,14 +9,37 @@
 #   NetworkManager (nmcli) が必要。2.4GHz 固定 (ESP32 は 5GHz を使えない)、WPA2。CPZ の IP は 10.42.0.1
 #   つないでいる間、CPZ 自身は家の Wi-Fi から外れる (Wi-Fi が1つなので)。off で家の Wi-Fi に戻る。
 #   再起動すると自動では AP にならない (autoconnect no)。
+#   v0.11.1: on の前につながっていた Wi-Fi を覚えておき、off ではそれに戻す。わからない時は
+#   「AP ではない」Wi-Fi の設定だけを順に試す (CPZ に最初から入っている AP 設定には切り替えない)。
 set -u
 CONF=/etc/hexa-matrix/ap.conf
 AP_SSID=hexamatrix-ap; AP_PASS=""; AP_IFACE=""
 [ -r "$CONF" ] && . "$CONF"
 CON=hexa-ap
+PREV=/etc/hexa-matrix/ap.prev
 
 jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 fail() { printf '{"ok":false,"err":"%s"}\n' "$(jstr "$1")"; exit 2; }
+# AP モードではない Wi-Fi の接続設定 (名前) を、自動接続の優先度の高い順に
+client_cons() {
+  nmcli -t -f NAME,TYPE con show 2>/dev/null | while IFS=: read -r n t; do
+    [ "$t" = "802-11-wireless" ] || continue
+    [ "$n" = "$CON" ] && continue
+    m=$(nmcli -g 802-11-wireless.mode con show "$n" 2>/dev/null)
+    [ "$m" = "ap" ] && continue
+    pr=$(nmcli -g connection.autoconnect-priority con show "$n" 2>/dev/null)
+    printf '%s\t%s\n' "${pr:-0}" "$n"
+  done | sort -rn | cut -f2-
+}
+back_home() {
+  if [ -r "$PREV" ]; then
+    p=$(cat "$PREV")
+    if [ -n "$p" ] && [ "$p" != "$CON" ] && nmcli con up "$p" >/dev/null 2>&1; then return 0; fi
+  fi
+  client_cons | { while IFS= read -r n; do
+    nmcli con up "$n" >/dev/null 2>&1 && exit 0
+  done; exit 1; }
+}
 state() {
   local on=false ip=""
   if nmcli -t -f NAME con show --active 2>/dev/null | grep -qx "$CON"; then
@@ -34,6 +57,10 @@ command -v nmcli >/dev/null 2>&1 || fail "nmcli がありません (NetworkManag
 case "${1:-status}" in
   on)
     [ ${#AP_PASS} -ge 8 ] || fail "$CONF の AP_PASS を8文字以上にしてください"
+    cur=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | awk -F: -v d="$AP_IFACE" '$2==d{print $1; exit}')
+    if [ -n "$cur" ] && [ "$cur" != "$CON" ] && [ "$(nmcli -g 802-11-wireless.mode con show "$cur" 2>/dev/null)" != "ap" ]; then
+      printf '%s' "$cur" > "$PREV"; chmod 600 "$PREV"
+    fi
     nmcli con delete "$CON" >/dev/null 2>&1 || true
     nmcli con add type wifi ifname "$AP_IFACE" con-name "$CON" autoconnect no ssid "$AP_SSID" \
       802-11-wireless.mode ap 802-11-wireless.band bg ipv4.method shared \
@@ -43,7 +70,7 @@ case "${1:-status}" in
     state ;;
   off)
     nmcli con down "$CON" >/dev/null 2>&1 || true
-    nmcli device connect "$AP_IFACE" >/dev/null 2>&1 || true     # 家の Wi-Fi へ戻す (見つかれば)
+    back_home || true                                             # 家の Wi-Fi へ戻す (AP の設定は選ばない)
     state ;;
   status)
     state ;;
