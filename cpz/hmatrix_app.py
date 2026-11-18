@@ -686,7 +686,8 @@ class App:
             cur = hk.get("set", "auto")
             i = order.index(cur) if cur in order else 0
             nxt = order[(i + (-1 if val == "LEFT" else 1)) % 3]
-            msg = {"auto": "USB を抜くと箱庭になります", "on": "いつも箱庭にします (USB をつないだまま試せます)", "off": "箱庭を使いません"}[nxt]
+            msg = {"auto": "USB を抜くと箱庭になります (Wi-Fi は切れます。本体の A+C 長押しで抜けます)",
+                   "on": "いつも箱庭にします (Wi-Fi はつながったまま・本体は眠りません)", "off": "箱庭を使いません"}[nxt]
             cfgcall({"hako": nxt}, msg)
         elif key == "chg" and lr:
             to = 180 if hk.get("chg") == 650 else 650

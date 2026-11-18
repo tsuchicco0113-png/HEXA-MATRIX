@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.10.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.10.1 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -64,6 +64,11 @@
 //       ③ 見回り: peek 秒 (既定 3) ごとに一瞬起きて BMI270 の「動いた」印を読み、動いていなければすぐ眠り直す
 //     眠る前のキャラの状態は RTC メモリに残し、起きたら続きから (起きた時はびっくりする)
 //   ・CONFIG chg=650 で充電 650mA (18350×2 用。既定 180)。plog=1 で microSD の /hexa/power.csv に電池の記録
+//
+//   v0.10.1:
+//   ・hako=on (いつも箱庭: 開発・展示用) では Wi-Fi を切らず、本体も眠らない (CPZ から Wi-Fi でつながったまま戻せる)。
+//     Wi-Fi を切って眠るのは、USB なしで自動的に箱庭になった時だけ (以前は on でも Wi-Fi を切り、CPZ から戻せなくなった)
+//   ・A と C を同時に長押し (1.5秒) で箱庭を抜ける。on なら auto に戻し、電池でも USB を抜き差しするまでは箱庭に入らない
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -85,7 +90,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.10.0";
+static const char* FW_VER = "0.10.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -127,6 +132,9 @@ static uint16_t cfgDeep = 90;           // キャラが寝てから、さらに�
 static uint16_t cfgAnyMg = 60;          // 「動いた」とみなす揺れ (mg)
 static bool     cfgPlog = false;        // 電池の記録 (/hexa/power.csv)
 static bool     hakoOn = false;
+static bool     hakoKeepNet = false;    // 箱庭の間も Wi-Fi を保つ (hako=on の時)
+static bool     hakoSuppress = false;   // A+C 長押しで抜けた: USB の抜き差しまで自動では入らない
+static int8_t   lastUsb = -1;
 static HxcWorld hako;
 static float    hakoDown0 = 90.f;       // 覚えた向きが無い時の「下」の傾き角
 static uint32_t hakoTickAt = 0, hakoSleepAt = 0, hakoLogAt = 0, hakoStartMs = 0;
@@ -732,6 +740,7 @@ static void imuTick(uint32_t now) {
 
 // ---------------------------------------------------------------- 設定 (CONFIG 0x07)
 static void hakoReset();
+static void hakoStop();
 static bool cfgFlag(const char* v) { return v[0] == '1' || (v[0] == 'o' && v[1] == 'n') || v[0] == 't'; }
 /// "autorot=1;shake=0;psave=1" / "rotreset=1"。"ssid2=" "pass2=" は USB からだけ、1パケットに1つ (値に ; を含めてよい)
 static void handleConfig() {
@@ -763,6 +772,8 @@ static void handleConfig() {
       // v0.10 箱庭
       else if (!strcmp(k, "hako")) {
         cfgHako = !strcmp(v, "auto") || v[0] == 'a' ? HAKO_AUTO : on ? HAKO_ON : HAKO_OFF; prefs.putUChar("hko", cfgHako);
+        hakoSuppress = false;
+        if (hakoOn && (cfgHako == HAKO_ON) != hakoKeepNet) { hakoStop(); }   // Wi-Fi を保つかが変わる時は入り直す (次の1秒で)
       }
       else if (!strcmp(k, "chg")) { cfgChg = atoi(v) >= 650 ? 650 : 180; prefs.putUShort("chg", cfgChg); M5.Power.setChargeCurrent(cfgChg); }
       else if (!strcmp(k, "hflip")) { cfgHflip = on ? -1 : 1; prefs.putChar("hfl", cfgHflip); }
@@ -871,8 +882,11 @@ static void hakoDeepSleep() {
 }
 static void hakoStart(bool resume) {
   hakoOn = true;
-  if (wifiOn) { if (client) client.stop(); MDNS.end(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
-  wifiOn = serverUp = mdnsUp = wifiShown = false; wSleepNow = false;
+  hakoKeepNet = (cfgHako == HAKO_ON);                     // いつも箱庭 (開発・展示) は Wi-Fi を保つ
+  if (!hakoKeepNet) {
+    if (wifiOn) { if (client) client.stop(); MDNS.end(); WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+    wifiOn = serverUp = mdnsUp = wifiShown = false; wSleepNow = false;
+  }
   if (pf) pf.close();
   live = false; clipMode = false; paused = true;
   if (up.active) abortUpload();
@@ -896,7 +910,8 @@ static void hakoStop() {
   memset(frame, 0, sizeof frame);
   goIdle();
   setOut(MASTER_LV[masterIdx]);
-  wifiSetup();
+  if (!wifiOn) wifiSetup();                               // 切っていた時だけつなぎ直す
+  hakoKeepNet = false;
   flashText("H", 400);
 }
 /// IMU → 画面の向きの加速度 (mg)。叩いた・振ったも見つける
@@ -949,8 +964,8 @@ static void hakoLoop(uint32_t now) {
     memcpy(hakoLast, f, 32); memcpy(frame, f, 32);
     setOut(bri); drawFrame(); lastDraw = now;
   }
-  // キャラが寝て deep 秒たったら本体も眠る (USB につないでいる時は眠らない)
-  if (hako.sleeping() && !usbPower()) {
+  // キャラが寝て deep 秒たったら本体も眠る (USB につないでいる時・いつも箱庭の時は眠らない)
+  if (hako.sleeping() && !usbPower() && !hakoKeepNet) {
     if (!hakoSleepAt) hakoSleepAt = now;
     else if ((int32_t)(now - hakoSleepAt) > (int32_t)cfgDeep * 1000) hakoDeepSleep();
   } else hakoSleepAt = 0;
@@ -958,11 +973,25 @@ static void hakoLoop(uint32_t now) {
 }
 static void hakoButtons() {
   if (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed()) lastActivity = millis();
+  // A と C を同時に 1.5 秒押す → 箱庭を抜ける (A/C の長押しの働きより先に見る)
+  static uint32_t bothSince = 0;
+  if (M5.BtnA.isPressed() && M5.BtnC.isPressed()) {
+    if (!bothSince) bothSince = millis();
+    else if (millis() - bothSince > 1500) {
+      bothSince = 0;
+      if (cfgHako == HAKO_ON) { cfgHako = HAKO_AUTO; prefs.putUChar("hko", cfgHako); }
+      hakoSuppress = true;
+      hakoStop();
+      return;
+    }
+    return;                                               // 同時押しの間は他のボタンの働きをしない
+  }
+  bothSince = 0;
   if (M5.BtnA.wasClicked()) hakoEv |= HXC_PET;
   if (M5.BtnC.wasClicked()) hakoEv |= HXC_POKE;
   if (M5.BtnA.wasHold()) { hakoReset(); flashText("*", 300); }
   if (M5.BtnB.wasClicked()) {                              // おやすみ
-    if (usbPower()) { hako.still = hako.pr.sleepAfter + 1; hako.enter(HXC_SLEEP); }
+    if (usbPower() || hakoKeepNet) { hako.still = hako.pr.sleepAfter + 1; hako.enter(HXC_SLEEP); }
     else hakoDeepSleep();
   }
   if (M5.BtnB.wasHold()) {
@@ -1073,11 +1102,15 @@ void loop() {
   static uint32_t lastMode = 0;
   if ((int32_t)(now - lastMode) > 1000) {
     lastMode = now;
-    bool want = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower());
+    bool usb = usbPower();
+    if (lastUsb >= 0 && (int8_t)usb != lastUsb) hakoSuppress = false;   // USB を抜き差ししたら A+C の「抜けた」を解除
+    lastUsb = (int8_t)usb;
+    bool want = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usb && !hakoSuppress);
     if (want && !hakoOn && !up.active) hakoStart(true);
     else if (!want && hakoOn) hakoStop();
   }
   if (hakoOn) {
+    if (hakoKeepNet) netTick(now);                         // いつも箱庭の間も CPZ とつながったまま
     hakoLoop(now);
     if (needRestore && (int32_t)(now - holdUntil) >= 0) needRestore = false;
     delay(hako.sleeping() ? 6 : 1);
