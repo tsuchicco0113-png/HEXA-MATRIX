@@ -41,6 +41,35 @@ async function request(type,payload,pred,ms){
   return p;
 }
 
+/// ファイル転送 (BEGIN / DATA / END)。名前が @live / @once なら本体はメモリに置いて流す (一時再生、v0.6〜)。
+/// STUDIO の中の転送は1本の列に並べる (本体に保存とプレビューの転送が混ざらないように)
+let xferChain=Promise.resolve();
+function xferFile(name,data,onProgress){
+  const run=async()=>{
+    await request(HXF.BEGIN,u32le(data.length).concat(ascii(name)),j=>j.ack==="begin",4000);
+    const CH=200, win=xferWin(), pend=[];
+    // v0.9.5: 返事を待たずに win 個先まで送る (USB の往復の待ちで遅くならないように)。古いファームは win=1
+    try{
+      for(let seq=0,off=0;off<data.length;seq++,off+=CH){
+        const chunk=[...data.subarray(off,off+CH)];
+        const s=seq&0xFFFF;
+        const p=request(HXF.DATA,[s&255,s>>8].concat(chunk),j=>j.ack===s,4000+win*500);
+        p.catch(()=>{});                             // 待つ前に失敗しても「未処理」にしない (後で await する)
+        pend.push(p);
+        if(pend.length>=win) await pend.shift();
+        if(onProgress) onProgress(Math.min(1,(off+CH)/data.length));
+      }
+      while(pend.length) await pend.shift();
+    }finally{ pend.length=0; }
+    return await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined||typeof j.clip==="number",8000);
+    // ↑ PING の返事の clip は true/false、END の返事はコマ数 (数) なので数だけ見る
+  };
+  const p=xferChain.then(run,run);
+  xferChain=p.catch(()=>{});
+  return p;
+}
+const clipOK=()=>!!devFw && devFw.localeCompare("0.6.0",undefined,{numeric:true})>=0;
+
 function slug(s){ return String(s||"").normalize("NFKC").replace(/[^A-Za-z0-9_-]+/g,"_").replace(/^_+|_+$/g,"").slice(0,30); }
 function suggestName(){
   const used=new Set((devList&&devList.files||[]).map(f=>f.n));
@@ -90,23 +119,8 @@ $("devSave").onclick=()=>devDo(async()=>{
   stopPlay();                                      // 送っている間は実機へのプレビューを止める
   await new Promise(r=>setTimeout(r,120));
   const bar=$("devBar"); bar.style.width="0%"; $("devProg").style.display="block";
-  const t0=performance.now();
-  await request(HXF.BEGIN,u32le(data.length).concat(ascii(name)),j=>j.ack==="begin",4000);
-  const CH=200, win=xferWin(), pend=[];
-  // v0.9.5: 返事を待たずに win 個先まで送る (USB の往復の待ちで遅くならないように)。古いファームは win=1
-  try{
-    for(let seq=0,off=0;off<data.length;seq++,off+=CH){
-      const chunk=[...data.subarray(off,off+CH)];
-      const s=seq&0xFFFF;
-      const p=request(HXF.DATA,[s&255,s>>8].concat(chunk),j=>j.ack===s,4000+win*500);
-      p.catch(()=>{});                               // 待つ前に失敗しても「未処理」にしない (後で await する)
-      pend.push(p);
-      if(pend.length>=win) await pend.shift();
-      bar.style.width=Math.round(Math.min(1,(off+CH)/data.length)*100)+"%";
-    }
-    while(pend.length) await pend.shift();
-  }finally{ pend.length=0; }
-  const j=await request(HXF.END,u32le(crc32(data)),j=>j.saved!==undefined,8000);
+  const t0=performance.now(), win=xferWin();
+  const j=await xferFile(name,data,f=>{ bar.style.width=Math.round(f*100)+"%"; });
   log("本体に保存しました: "+j.saved+" ("+(data.length/1024).toFixed(1)+"KB / "+((performance.now()-t0)/1000).toFixed(1)+"秒 / 窓"+win+")","ok");
   status("本体に保存しました。本体だけで流れます","ok");
   devList=await request(HXF.LIST,[],j=>j.list,4000);

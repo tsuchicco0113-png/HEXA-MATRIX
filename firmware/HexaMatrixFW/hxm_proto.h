@@ -12,6 +12,11 @@
 //                             これが通るまで PING と AUTH 以外を "auth" で断る。USB は常に不要
 //                             OK → {"ok":true,"auth":true} / 違う → {"ok":false,"err":"auth"} を返して切る
 //                             PING の返事の "auth" が true なら、合言葉が必要 (まだ通っていない)
+//        0x07 CONFIG  len=n   設定 (v0.9.6)。"autorot=1;shake=0;psave=1" のように key=値 を ; で区切る。本体に覚える
+//                             autorot 自動回転 / shake 振ると次の番組 / psave 消灯中は Wi-Fi 省電力 (既定 1)
+//                             rotreset=1 覚えた向きを忘れる / rotlearn=1 いまの向きを覚え直す
+//                             "ssid2=名前" "pass2=パスワード" (1パケットに1つ、USB からだけ) 2つ目の Wi-Fi
+//                             返事は PING と同じ (cfg / imu / learn / batt / lvl / chg / wnet / ssid2)。だめなら "bad config"
 //   ---- 単体再生 (v0.3) ----
 //        0x10 FILE_BEGIN len=4+n  u32 全体の大きさ + ファイル名 (英数字 _ - . のみ)
 //        0x11 FILE_DATA  len=2+n  u16 通し番号 + 中身 (n は 200 まで)
@@ -31,7 +36,7 @@
 #pragma once
 #include <stdint.h>
 
-enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06,
+enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06, HXM_CONFIG = 0x07,
                  HXM_FILE_BEGIN = 0x10, HXM_FILE_DATA = 0x11, HXM_FILE_END = 0x12,
                  HXM_LIST = 0x13, HXM_DELETE = 0x14, HXM_PLAY = 0x15 };
 static const uint8_t HXM_MAX_PAYLOAD = 240;

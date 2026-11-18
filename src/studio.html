@@ -731,6 +731,7 @@ function onLine(ln){
     if(j.takeover){                                                // CPZ 側で流し始めた → こちらからは送らない
       const was=$("live").checked||$("pLive").checked;
       $("live").checked=false; $("pLive").checked=false;
+      if(typeof P!=="undefined"){ P.clip=false; P.clipPending=false; P.clipWant=null; P.quiet=true; }   // CPZ の一時再生を 0xFE で止めないように
       if(typeof animStop==="function") animStop(true);
       if(was){ log("CPZ側で流し始めたので、実機への送信を止めました (チェックを入れ直すとこちらが優先)","ok"); status("CPZ側で流し始めたので、実機への送信を止めました","ok"); }
       return;
@@ -739,7 +740,7 @@ function onLine(ln){
     else if(j.ver) log("CPZ: hub v"+j.ver+(j.port?" / "+j.port:""),"ok");
     return;
   }
-  if(j.ack!==undefined || j.saved!==undefined) return;            // 送信中の返事はログに出さない
+  if(j.ack!==undefined || j.saved!==undefined || typeof j.clip==="number") return;   // 送信中の返事 (一時再生の終わりも) はログに出さない
   if(j.list){ devList=j; devRender(); return; }
   if(j.ok===false){ if(!waiters.length) log("本体: エラー "+errText(j.err),"err"); return; }
   if(j.bench_us!==undefined){ log("速度計測: 1コマ "+(j.bench_us/1000).toFixed(1)+"ms (最大 約"+j.fps_max+"コマ/秒)","ok"); return; }

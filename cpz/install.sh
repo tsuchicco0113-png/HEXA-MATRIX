@@ -26,6 +26,21 @@ for g in dialout video input; do
   fi
 done
 
+echo "== event access point (hexa-ap)"
+# v0.9.6: イベント用に CPZ をアクセスポイントにする。ハブ (このユーザー) から sudo -n で呼べるように、
+# root の持ち物として /usr/local/sbin に置く (ユーザーが書き換えられる場所のスクリプトを sudo 許可にしない)
+sudo install -m 755 -o root -g root "$DIR/hexa-ap.sh" /usr/local/sbin/hexa-ap
+sudo install -d -m 755 /etc/hexa-matrix
+if ! sudo test -f /etc/hexa-matrix/ap.conf; then
+  APP=$(tr -dc 'a-km-z2-9' </dev/urandom | head -c 10)
+  printf 'AP_SSID=hexamatrix-ap\nAP_PASS=%s\nAP_IFACE=\n' "$APP" | sudo tee /etc/hexa-matrix/ap.conf >/dev/null
+  sudo chmod 600 /etc/hexa-matrix/ap.conf
+fi
+echo "$U ALL=(root) NOPASSWD: /usr/local/sbin/hexa-ap" | sudo tee /etc/sudoers.d/hexa-matrix >/dev/null
+sudo chmod 440 /etc/sudoers.d/hexa-matrix
+sudo visudo -cf /etc/sudoers.d/hexa-matrix >/dev/null || { sudo rm -f /etc/sudoers.d/hexa-matrix; echo "sudoers の設定に失敗 (イベントAPは使えません)"; }
+command -v nmcli >/dev/null 2>&1 || echo "※ nmcli (NetworkManager) が無いので、イベントAPは使えません"
+
 echo "== service hexa-matrix (user: $U, port $PORT)"
 sudo tee /etc/systemd/system/hexa-matrix.service >/dev/null <<UNIT
 [Unit]

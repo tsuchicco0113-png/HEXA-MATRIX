@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.9.5 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.9.6 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -42,6 +42,16 @@
 //   v0.9.5: まとめて送る
 //   ・USB の受信バッファを 256B → 4KB に広げた。ファイル転送の DATA を返事を待たずに 16 個先まで送っても溢れない
 //   ・PING の返事に "win":16 (送り側が返事を待たずに先へ送ってよい DATA の数)。ハブ / STUDIO はこれを見て窓を決める
+//
+//   v0.9.6:
+//   ・自動回転 (BMI270)。C 長押し / CPZ で向きを変えると、そのときの傾きを覚える。自動回転を入れた瞬間の向きも覚える
+//     (画面の回転と傾きの対応は実機ごとに決め打ちしない。隣り合う2つの向きを覚えると4つとも当たる)
+//   ・振ると次の番組 (2G を超える揺れが 0.8 秒に3回)
+//   ・消灯中の省電力: 何も出していない状態が 10 秒続いたら Wi-Fi の省電力を入れ、何か届いたらすぐ切る。
+//     消灯中は LED ドライバへの送り直しもしない
+//   ・設定パケット CONFIG (0x07) "autorot=1;shake=0;psave=1"。本体に覚える。PING に imu / cfg / 電池 (batt/lvl/chg)
+//   ・2つ目の Wi-Fi (wifi.txt の ssid2= / pass2=、または USB から CONFIG "ssid2=..." "pass2=...")。
+//     1つ目に 15 秒つながらなければ 2つ目へ (イベントで CPZ をアクセスポイントにする時用)
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -50,10 +60,11 @@
 #include "hxm_proto.h"
 #include "hxm_xfer.h"
 #include "hxm_wifi.h"
+#include "hxm_orient.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.9.5";
+static const char* FW_VER = "0.9.6";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -74,8 +85,25 @@ static HxmParser usbParser, netParser;
 static HxmParser* pk = &usbParser;     // いま処理しているパケット (USB か Wi-Fi か)
 static Print*     out = &Serial;       // 返事を返す先 (パケットが来た側)
 
+// 設定 (CONFIG 0x07、本体に覚える)
+static bool     cfgAutoRot = false;    // 自動回転
+static bool     cfgShake = false;      // 振ると次の番組
+static bool     cfgPsave = true;       // 消灯中は Wi-Fi の省電力
+// 向き・振り (BMI270)
+static bool     imuOk = false;
+static HxmOrient orient;
+static HxmShake  shaker;
+static float    lgx = 0, lgy = 0, lgz = 1; static bool lgInit = false;   // ならした重力
+static int      rotCand = -1; static uint32_t rotCandSince = 0;
+// 省電力
+static uint32_t lastActivity = 0;      // 最後に何か届いた / ボタンが押された時刻
+static bool     wSleepPref = false;    // wifi.txt の sleep=on (いつも省電力)
+static bool     wSleepNow = false;
 // Wi-Fi
 static const uint16_t NET_PORT = 7800;
+static String   wSsid[2], wPass[2];    // 1つ目 / 2つ目 (v0.9.6)
+static int      wIdx = 0;              // いま使っている方
+static uint32_t wTryAt = 0;            // いまの方でつなぎ始めた (またはつながっていた最後の) 時刻
 static WiFiServer server(NET_PORT);
 static WiFiClient client;
 static char     wName[32] = "hexamatrix";
@@ -183,7 +211,7 @@ static void sendStatus() {
                 "\"store\":\"%s\",\"sd\":\"%s\",\"n\":%d,\"cur\":%d,\"paused\":%s,\"live\":%s,\"master\":%u,"
                 "\"wifi\":\"%s\",\"ip\":\"%s\",\"name\":\"%s\",\"clip\":%s,\"auth\":%s,\"win\":%d,"
                 "\"net\":{\"rssi\":%d,\"sleep\":%d,\"conn\":%lu,\"bytes\":%lu,\"ok\":%lu,\"bad\":%lu,"
-                "\"begin\":%lu,\"data\":%lu,\"end\":%lu,\"drop\":%lu,\"up\":%d,\"got\":%lu}}\n",
+                "\"begin\":%lu,\"data\":%lu,\"end\":%lu,\"drop\":%lu,\"up\":%d,\"got\":%lu},",
                 FW_VER, liveBri, rot, (unsigned long)frames,
                 (unsigned long)(usbParser.ok + netParser.ok), (unsigned long)(usbParser.bad + netParser.bad), (unsigned long)lastDrawUs,
                 store, sdState(), nfiles, cur, paused ? "true" : "false", live ? "true" : "false", masterIdx + 1,
@@ -194,6 +222,14 @@ static void sendStatus() {
                 (unsigned long)netConns, (unsigned long)netBytes, (unsigned long)netParser.ok, (unsigned long)netParser.bad,
                 (unsigned long)netBegin, (unsigned long)netData, (unsigned long)netEnd, (unsigned long)netDrop,
                 up.active ? 1 : 0, (unsigned long)up.got);
+  // v0.9.6: 向き・設定・電池・どちらの Wi-Fi か
+  int16_t bv = M5.Power.getBatteryVoltage();     // mV。0=電池なし / -1=まだ分からない
+  out->printf("\"imu\":\"%s\",\"learn\":%d,\"cfg\":{\"autorot\":%d,\"shake\":%d,\"psave\":%d},"
+              "\"batt\":%d,\"lvl\":%ld,\"chg\":%s,\"wnet\":%d,\"wsleep\":%d,\"ssid2\":%s}\n",
+              imuOk ? "ok" : "none", orient.known(), cfgAutoRot ? 1 : 0, cfgShake ? 1 : 0, cfgPsave ? 1 : 0,
+              (int)bv, (long)(bv > 0 ? M5.Power.getBatteryLevel() : -1), (bv > 0 && M5.Power.isCharging()) ? "true" : "false",
+              (wifiOn && WiFi.status() == WL_CONNECTED) ? wIdx + 1 : 0, wSleepNow ? 1 : 0,
+              wSsid[1].length() ? "true" : "false");
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -473,6 +509,7 @@ static const char* WIFI_TXT = "/hexa/wifi.txt";
 static void wifiSetup() {
   String ssid = prefs.getString("wssid", ""), pass = prefs.getString("wpass", ""), nm = prefs.getString("wname", "hexamatrix");
   String key = prefs.getString("wkey", "");
+  String ssid2 = prefs.getString("wssid2", ""), pass2 = prefs.getString("wpass2", "");
   if (FSYS == &SD && SD.exists(WIFI_TXT)) {
     static char buf[1024], outb[1024 + 16];
     File f = SD.open(WIFI_TXT, FILE_READ);
@@ -492,10 +529,15 @@ static void wifiSetup() {
       }
       if (c.name[0]) nm = c.name;
       if (c.hasKey && !c.keyMasked) key = c.key;                  // key= が空なら合言葉なし。***** なら覚えているもの
+      if (c.hasSsid2) {                                           // ssid2= が空なら2つ目を消す
+        if (!c.ssid2[0]) { ssid2 = ""; pass2 = ""; }
+        else { ssid2 = c.ssid2; if (!c.pass2Masked) pass2 = c.pass2; }
+      }
       if (c.sleep >= 0) prefs.putChar("wsleep", (int8_t)c.sleep);
       if (c.tx >= 0) prefs.putChar("wtx", (int8_t)c.tx);
       prefs.putString("wssid", ssid); prefs.putString("wpass", pass); prefs.putString("wname", nm);
       prefs.putString("wkey", key);
+      prefs.putString("wssid2", ssid2); prefs.putString("wpass2", pass2);
       size_t m = whole ? hxm_wifi_mask(buf, n, outb, sizeof outb) : 0;
       if (m) {
         File w = SD.open(WIFI_TXT, FILE_WRITE);
@@ -505,29 +547,44 @@ static void wifiSetup() {
   }
   strlcpy(wName, nm.length() ? nm.c_str() : "hexamatrix", sizeof wName);
   strlcpy(wKey, key.c_str(), sizeof wKey);
+  wSsid[0] = ssid; wPass[0] = pass; wSsid[1] = ssid2; wPass[1] = pass2; wIdx = 0;
   if (!ssid.length()) { if (wifiOn) { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); } wifiOn = false; return; }
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(wName);
   WiFi.setAutoReconnect(true);
   // v0.9.2: 省電力は既定で切る (v0.9 で入れたが、受信が遅れたり抜けたりして転送が止まる原因だった。
   //         ちらつきの本当の原因は転送失敗で1コマずつ送りになっていたこと)。wifi.txt の sleep=on で入れられる
-  WiFi.setSleep(prefs.getChar("wsleep", 0) != 0);
+  //  v0.9.6: sleep=on でなければ、消灯中だけ省電力にする (loop の powerTick)
+  wSleepPref = prefs.getChar("wsleep", 0) != 0;
+  WiFi.setSleep(wSleepPref); wSleepNow = wSleepPref;
   WiFi.begin(ssid.c_str(), pass.c_str());
+  wTryAt = millis();
   WiFi.setTxPower((wifi_power_t)(prefs.getChar("wtx", 15) * 4));   // 0.25dBm 単位
   wifiOn = true;
 }
 static void handlePacket();
 static void feedByte(HxmParser& p, Print* src, uint8_t b) {
   int r = p.feed(b);
-  if (r == 1) { pk = &p; out = src; handlePacket(); }
+  if (r == 1) { pk = &p; out = src; lastActivity = millis(); handlePacket(); }
   else if (r == -1) { out = src; sendErr("crc"); }
+}
+static void wifiSleep(bool s) {
+  if (!wifiOn || s == wSleepNow) return;
+  WiFi.setSleep(s); wSleepNow = s;
 }
 static void netTick(uint32_t now) {
   if (!wifiOn) return;
+  if (WiFi.status() != WL_CONNECTED && wSsid[1].length() && (int32_t)(now - wTryAt) > 15000) {
+    // v0.9.6: 15 秒つながらなければもう片方へ (家の Wi-Fi ⇔ イベント用の CPZ)
+    wIdx ^= 1; wTryAt = now; wifiShown = false;
+    WiFi.disconnect(false);
+    WiFi.begin(wSsid[wIdx].c_str(), wPass[wIdx].c_str());
+  }
   if (WiFi.status() == WL_CONNECTED) {
+    wTryAt = now;
     if (!serverUp) { server.begin(); server.setNoDelay(true); serverUp = true; }
     if (!mdnsUp && MDNS.begin(wName)) { MDNS.addService("hexamatrix", "tcp", NET_PORT); mdnsUp = true; }
-    if (!wifiShown) { wifiShown = true; flashText("W", 500); if (!paused) nextAt = holdUntil; }
+    if (!wifiShown) { wifiShown = true; flashText(wIdx ? "W2" : "W", 500); if (!paused) nextAt = holdUntil; }
     WiFiClient nc = server.accept();
     if (nc) {                                        // 新しくつないできた方を使う (古い方は切る)
       if (client) client.stop();
@@ -542,6 +599,8 @@ static void netTick(uint32_t now) {
       int r = client.read(b, n < (int)sizeof b ? n : (int)sizeof b);
       if (r <= 0) break;
       netBytes += r;
+      lastActivity = millis();
+      if (!wSleepPref) wifiSleep(false);            // 何か届いたら省電力をすぐ切る (続きが遅れないように)
       for (int i = 0; i < r && !netKick; i++) feedByte(netParser, &client, b[i]);
       lastNetByte = millis();
       if (netKick) break;
@@ -568,6 +627,92 @@ static void bench() {
   uint32_t us = (micros() - t0) / n;
   out->printf("{\"ok\":true,\"bench_us\":%lu,\"fps_max\":%lu}\n", (unsigned long)us, (unsigned long)(us ? 1000000UL / us : 0));
   if (pf) { pf.seek(8); pfIdx = 0; nextAt = millis(); }
+}
+
+// ---------------------------------------------------------------- 向き・振り (v0.9.6)
+static void saveOrient() {
+  char k[4] = "ra0";
+  for (int i = 0; i < 4; i++) { k[2] = '0' + i; prefs.putFloat(k, orient.ang[i]); }
+}
+static void loadOrient() {
+  char k[4] = "ra0";
+  for (int i = 0; i < 4; i++) { k[2] = '0' + i; orient.ang[i] = prefs.getFloat(k, NAN); }
+}
+/// いまの向き (rot) が正しいとして、いまの傾きを覚える。立てていなければ覚えない
+static bool learnRot() {
+  if (!imuOk) return false;
+  float ax, ay, az, a;
+  M5.Imu.update();
+  if (!M5.Imu.getAccel(&ax, &ay, &az) || !hxm_tilt(ax, ay, az, &a)) return false;
+  orient.learn(rot, a); saveOrient();
+  lgInit = false; rotCand = -1;
+  return true;
+}
+static void setRot(uint8_t r, bool manual) {
+  rot = r & 3;
+  M5.Display.setRotation(rot);
+  if (manual) { prefs.putUChar("rot", rot); learnRot(); }   // 自動で回した時は保存しない (フラッシュを傷めない)
+}
+static void nextProgram() { live = false; clipMode = false; paused = false; openProgram(cur + 1, true); }
+static void imuTick(uint32_t now) {
+  static uint32_t last = 0;
+  if (!imuOk || !(cfgAutoRot || cfgShake) || (int32_t)(now - last) < 40) return;
+  last = now;
+  float ax, ay, az;
+  M5.Imu.update();
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+  float mag = sqrtf(ax * ax + ay * ay + az * az);
+  if (cfgShake && !up.active && shaker.feed(mag, now)) { lastActivity = now; nextProgram(); return; }
+  if (!cfgAutoRot) return;
+  if (fabsf(mag - 1.f) > 0.25f) { rotCand = -1; return; }          // 動かしている間は決めない
+  if (!lgInit) { lgx = ax; lgy = ay; lgz = az; lgInit = true; }
+  else { lgx += 0.3f * (ax - lgx); lgy += 0.3f * (ay - lgy); lgz += 0.3f * (az - lgz); }
+  float a, d;
+  if (!hxm_tilt(lgx, lgy, lgz, &a)) { rotCand = -1; return; }        // 寝かせている
+  int b = orient.best(a, &d);
+  if (b < 0 || d > 35.f || b == rot) { rotCand = -1; return; }       // はっきりしない / 今のまま
+  if (b != rotCand) { rotCand = b; rotCandSince = now; return; }
+  if ((int32_t)(now - rotCandSince) >= 500) {                         // 0.5 秒そのままなら回す
+    setRot((uint8_t)b, false); rotCand = -1;
+    if (!needRestore) drawFrame();
+  }
+}
+
+// ---------------------------------------------------------------- 設定 (CONFIG 0x07)
+static bool cfgFlag(const char* v) { return v[0] == '1' || (v[0] == 'o' && v[1] == 'n') || v[0] == 't'; }
+/// "autorot=1;shake=0;psave=1" / "rotreset=1"。"ssid2=" "pass2=" は USB からだけ、1パケットに1つ (値に ; を含めてよい)
+static void handleConfig() {
+  char s[HXM_MAX_PAYLOAD + 1];
+  memcpy(s, pk->buf, pk->len); s[pk->len] = 0;
+  if (!strncmp(s, "ssid2=", 6) || !strncmp(s, "pass2=", 6)) {
+    if (out != &Serial) { sendErr("usb only"); return; }               // Wi-Fi から Wi-Fi の設定は変えさせない
+    bool isSsid = s[0] == 's';
+    String v = String(s + 6);
+    if (isSsid) { wSsid[1] = v; prefs.putString("wssid2", v); if (!v.length()) { wPass[1] = ""; prefs.putString("wpass2", ""); } }
+    else { wPass[1] = v; prefs.putString("wpass2", v); }
+    sendStatus();
+    return;
+  }
+  bool bad = false;
+  for (char* p = s; p && *p;) {
+    char* e = strchr(p, ';'); if (e) *e = 0;
+    char* eq = strchr(p, '=');
+    if (eq) {
+      *eq = 0; const char* k = p; const char* v = eq + 1; bool on = cfgFlag(v);
+      if (!strcmp(k, "autorot")) {
+        if (on && !cfgAutoRot) learnRot();                           // 入れた瞬間の向きを正しいとして覚える
+        cfgAutoRot = on; prefs.putBool("car", on); rotCand = -1; lgInit = false;
+      }
+      else if (!strcmp(k, "shake")) { cfgShake = on; prefs.putBool("csh", on); }
+      else if (!strcmp(k, "psave")) { cfgPsave = on; prefs.putBool("cps", on); }
+      else if (!strcmp(k, "rotreset")) { if (on) { orient.clear(); saveOrient(); } }
+      else if (!strcmp(k, "rotlearn")) { if (on && !learnRot()) bad = true; }
+      else bad = true;
+    } else if (*p) bad = true;
+    p = e ? e + 1 : nullptr;
+  }
+  if (bad) { sendErr("bad config"); return; }
+  sendStatus();
 }
 
 /// 合言葉の照合 (長さが違っても最後まで比べる)
@@ -603,8 +748,9 @@ static void handlePacket() {
       if (pk->len == 1) { liveBri = pk->buf[0]; if (live) setOut(liveBri); }
       return;                                     // 再生中に毎回返事をすると USB が混むので返さない
     case HXM_ROTATE:
-      if (pk->len == 1) { rot = pk->buf[0] & 3; M5.Display.setRotation(rot); prefs.putUChar("rot", rot); drawFrame(); sendStatus(); }
+      if (pk->len == 1) { setRot(pk->buf[0], true); drawFrame(); sendStatus(); }
       return;
+    case HXM_CONFIG: handleConfig(); return;
     case HXM_PING:  sendStatus(); return;
     case HXM_BENCH: bench(); return;
     default:
@@ -615,8 +761,9 @@ static void handlePacket() {
 
 // ---------------------------------------------------------------- ボタン
 static void buttons() {
+  if (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed()) lastActivity = millis();
   if (M5.BtnA.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur - 1, true); }
-  if (M5.BtnC.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur + 1, true); }
+  if (M5.BtnC.wasClicked()) nextProgram();
   if (M5.BtnA.wasHold())    { live = false; clipMode = false; paused = false; openProgram(cur, true); }
   if (M5.BtnB.wasClicked()) {
     if (live || clipMode || !paused) { goIdle(); flashText("II", 400); }   // 何か出ていれば止めて消灯
@@ -628,8 +775,8 @@ static void buttons() {
     if (!paused) nextAt = holdUntil;
   }
   if (M5.BtnC.wasHold()) {
-    rot = (rot + 1) & 3; prefs.putUChar("rot", rot);
-    M5.Display.setRotation(rot); flashText("^", 500);
+    setRot((uint8_t)(rot + 1), true);              // v0.9.6: いまの傾きも覚える (自動回転の手がかり)
+    flashText("^", 500);
     if (!paused) nextAt = holdUntil;
   }
 }
@@ -643,6 +790,11 @@ void setup() {
   rot       = prefs.getUChar("rot", rot) & 3;
   masterIdx = prefs.getUChar("mst", masterIdx) & 3;
   cur       = prefs.getUChar("cur", 0);
+  cfgAutoRot = prefs.getBool("car", false);
+  cfgShake   = prefs.getBool("csh", false);
+  cfgPsave   = prefs.getBool("cps", true);
+  imuOk = M5.Imu.isEnabled();
+  loadOrient();
   M5.BtnA.setHoldThresh(800); M5.BtnB.setHoldThresh(800); M5.BtnC.setHoldThresh(800);
   M5.Display.setColorDepth(8);
   M5.Display.setRotation(rot);
@@ -698,12 +850,19 @@ void loop() {
     }
   }
   if (clipMode) clipTick(); else playTick();
+  imuTick(now);
+  // v0.9.6: 何も出していない (消灯) 状態
+  const bool showing = live || clipMode || !paused || up.active;
   // LED ドライバ (TM1680) の状態を時々送り直す。電源の揺れなどで消えても 0.2 秒で戻るように
+  // (v0.9.6: 消灯中は真っ暗なので送り直さない)
   static uint32_t lastKeep = 0;
-  if (now - lastKeep > 200 && !needRestore && (int32_t)(now - holdUntil) >= 0) {
+  if (showing && now - lastKeep > 200 && !needRestore && (int32_t)(now - holdUntil) >= 0) {
     lastKeep = now;
     if (outBri > 0) { M5.Display.wakeup(); M5.Display.setBrightness((uint8_t)outBri); }
     drawFrame();
   }
-  delay(1);
+  // 省電力: 消灯が 10 秒続いたら Wi-Fi の省電力を入れる。何か届けば netTick ですぐ切る
+  if (wSleepPref) wifiSleep(true);
+  else wifiSleep(cfgPsave && !showing && (int32_t)(now - lastActivity) > 10000);
+  delay(showing ? 1 : 4);
 }

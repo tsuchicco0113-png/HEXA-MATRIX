@@ -32,6 +32,7 @@ import threading
 import time
 import tty
 import urllib.parse
+import subprocess
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -39,17 +40,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.9.5"
+VERSION = "0.9.6"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
 STUDIO_CANDIDATES = [os.path.join(HERE, "..", "hexa-matrix-studio.html"),
                      os.path.join(HERE, "hexa-matrix-studio.html")]
 
-T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH, T_AUTH = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06
+T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH, T_AUTH, T_CONFIG = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
 T_BEGIN, T_DATA, T_END, T_LIST, T_DEL, T_PLAY = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15
 CHUNK = 200
 WIN_MAX = 16             # 返事を待たずに先へ送る DATA の数の上限 (本体が PING の "win" で教えてくれる、v0.9.5〜)
+AP_CMD = ["sudo", "-n", "/usr/local/sbin/hexa-ap"]   # イベント用アクセスポイント (install.sh が置く、v0.9.6)
+LEASES = "/var/lib/NetworkManager/dnsmasq-*.leases"  # AP につないできた CoreMatrix の IP (mDNS が引けない時の予備)
 KEEPALIVE = 1.0          # 同じ絵が長く続くとき、本体のライブ待ち(3秒)が切れないように送り直す間隔
 
 
@@ -86,6 +89,18 @@ def safe_name(s):
     s = re.sub(r"\.hxm$", "", str(s or ""), flags=re.I)
     s = re.sub(r"[^A-Za-z0-9_-]+", "_", s).strip("_")[:30]
     return (s + ".hxm") if s else ""
+
+
+def pkt_types(data):
+    """ブラウザから届いたバイト列に入っているパケットの type を並べる (中継の見張り用)"""
+    out, i, n = [], 0, len(data)
+    while i + 4 < n:
+        if data[i] == 0xA5 and data[i + 1] == 0x5A:
+            out.append(data[i + 2])
+            i += 5 + data[i + 3]
+        else:
+            i += 1
+    return out
 
 
 def lib_name(s):
@@ -164,9 +179,26 @@ class Link:
         threading.Timer(0.3, lambda: self.send(packet(T_PING))).start()
         return True
 
+    def _lease_hosts(self):
+        """CPZ がアクセスポイントの時、つないできた CoreMatrix の IP を DHCP の記録から探す (v0.9.6)"""
+        names = {h.partition(":")[0].lower().removesuffix(".local") for h in self.nets}
+        out = []
+        for p in glob.glob(LEASES):
+            try:
+                with open(p) as f:
+                    for ln in f:
+                        v = ln.split()          # 期限 MAC IP ホスト名 ...
+                        if len(v) >= 4 and v[3].lower() in names:
+                            out.append(v[2])
+            except OSError:
+                pass
+        return out
+
     def _open_net(self, hosts=None):
         if time.monotonic() < self.auth_bad_until:
             return False
+        if hosts is None and self.nets:
+            hosts = self.nets + [ip for ip in self._lease_hosts() if ip not in self.nets]
         for h in (hosts or self.nets):
             host, _, port = h.partition(":")
             try:
@@ -380,7 +412,8 @@ class Link:
                     self.forget(w)
             step = "終わり"
             return self.request(packet(T_END, struct.pack("<I", zlib.crc32(data) & 0xFFFFFFFF)),
-                                lambda j: "saved" in j or "clip" in j, tmo + 4)
+                                # PING の返事にも "clip" (true/false) があるので、コマ数 (int) の時だけ
+                                lambda j: "saved" in j or type(j.get("clip")) is int, tmo + 4)
         except RuntimeError as e:
             raise DevError(f"{e} ({step}, 窓{win})", getattr(e, "code", None)) from None
 
@@ -399,6 +432,8 @@ ERR_TEXT = {"no storage": "保存先がありません", "bad name": "ファイ�
             "rename failed": "名前を付けられません", "not found": "見つかりません",
             "upload timeout": "途中で止まりました", "no memory": "本体のメモリが足りません",
             "bad clip": "コマ列の形が違います",
+            "bad config": "本体の設定を変えられません (ファームが古いか、立てて置いていないかもしれません)",
+            "usb only": "この設定は USB でつないでいる時だけ変えられます",
             "busy": "本体が別の受け取りの最中です (USB と Wi-Fi の両方から送っていませんか)",
             "auth": "本体の合言葉と違います (wifi.txt の key= と --key / HMATRIX_KEY)",
             "unknown type": "本体のファームが古いです。v0.3.0 以上を書き込んでください"}
@@ -496,7 +531,8 @@ class Hub:
         self.player = Player(link)
         self.busy = None             # 本体へ送っている最中 {"name","done","total"}
         self.busy_lock = threading.Lock()
-        self.xfer_lock = threading.Lock()   # ファイル転送は同時に1つだけ
+        self.xfer_lock = threading.Lock()   # ファイル転送は同時に1つだけ (CPZ の転送とブラウザ中継の転送で共有)
+        self.relay_hold = None       # ブラウザ中継の転送が xfer_lock を持っている間 {"ws": id, "t": 最後のパケットの時刻}
         self.web_last = 0.0          # ブラウザ(ws)から最後に送られた時刻
         self.last_say = None
 
@@ -577,6 +613,24 @@ class Hub:
             raise ValueError("見つかりません")
 
     # ---- 流す
+    def lock_xfer(self, timeout=10):
+        """CPZ からの転送の前に。ブラウザの中継転送が途中で止まったまま (8秒) なら取り上げる"""
+        end = time.time() + timeout
+        while True:
+            if self.xfer_lock.acquire(timeout=0.25):
+                return True
+            h = self.relay_hold
+            if h and time.time() - h["t"] > 8:
+                log("ブラウザからの転送が途中で止まったので打ち切ります")
+                self.relay_hold = None
+                try:
+                    self.xfer_lock.release()
+                except RuntimeError:
+                    pass
+                continue
+            if time.time() > end:
+                return False
+
     def play_lib(self, name, loop=True, dur=None):
         name, data = self.lib_read(name)
         return self.play_data(name, data, loop, dur)
@@ -595,10 +649,18 @@ class Hub:
         """CPZ から流す。ファーム v0.6 以上ならコマ列をまとめて本体のメモリへ送り、本体の時計で流してもらう
         (1コマずつ送ると、特に Wi-Fi では届き方がばらついてカクつく / 本体の番組と混ざる)"""
         fr = H.parse_hxm(data)
+        # v0.9.6: 本体がつながっていない (合言葉違いで切られた時も) のに「流しています」にならないように
+        if not self.link.connected:
+            raise RuntimeError("本体がつながっていません" + (" (合言葉が違うかもしれません)" if time.monotonic() < self.link.auth_bad_until else ""))
+        if not self.link.status:                       # つないだ直後でファームの版がまだ分からない
+            try:
+                self.link.request(packet(T_PING), lambda j: "fw" in j, 3)
+            except RuntimeError:
+                pass
         self._takeover()
         if self.link.connected and self.link.fw_at_least(0, 6, 0) and len(data) <= 4 * 1024 * 1024:
-            if not self.xfer_lock.acquire(timeout=10):
-                raise RuntimeError("いま別の番組を送っています")
+            if not self.lock_xfer(10):
+                raise RuntimeError("いま別の番組を送っています (ブラウザから本体へ送っている最中かもしれません)")
             try:
                 self.player.stop()
                 # 失敗したら少し待ってやり直す。窓を 本体の数 → 4 → 1 と減らす (最後は遅いが確実)
@@ -678,7 +740,7 @@ class Hub:
             if self.busy:
                 raise RuntimeError("いま別の番組を送っています")
             self.busy = {"name": dn, "done": 0, "total": len(data)}
-        if not self.xfer_lock.acquire(timeout=10):
+        if not self.lock_xfer(10):
             with self.busy_lock:
                 self.busy = None
             raise RuntimeError("いま別の番組を送っています")
@@ -706,6 +768,55 @@ class Hub:
             self.xfer_lock.release()
             with self.busy_lock:
                 self.busy = None
+
+    # ---- 本体の設定 (ファーム v0.9.6〜)
+    CFG_KEYS = ("autorot", "shake", "psave", "rotreset", "rotlearn")
+
+    def dev_config(self, opt):
+        if not self.link.fw_at_least(0, 9, 6):
+            raise RuntimeError("本体のファームを v0.9.6 以上にしてください (自動回転・振って次・省電力)")
+        items = [f"{k}={1 if opt[k] else 0}" for k in self.CFG_KEYS if k in opt]
+        if not items:
+            raise ValueError("設定がありません")
+        return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)
+
+    def dev_wifi2(self, ssid, pw):
+        """2つ目の Wi-Fi を本体に教える (USB の時だけ。本体は Wi-Fi からは受け付けない)"""
+        if self.link.kind != "usb":
+            raise RuntimeError("本体に Wi-Fi を教えるのは USB でつないでいる時だけです")
+        if not self.link.fw_at_least(0, 9, 6):
+            raise RuntimeError("本体のファームを v0.9.6 以上にしてください")
+        ssid, pw = str(ssid or ""), str(pw or "")
+        if len(ssid.encode()) > 32 or len(pw.encode()) > 64:
+            raise ValueError("名前は32バイト、パスワードは64バイトまでです")
+        self.link.request(packet(T_CONFIG, b"ssid2=" + ssid.encode()), lambda j: "fw" in j, 4)
+        return self.link.request(packet(T_CONFIG, b"pass2=" + pw.encode()), lambda j: "fw" in j, 4)
+
+    def ap(self, cmd="status"):
+        """イベント用アクセスポイント (CPZ を AP にする)。cmd: on / off / status"""
+        try:
+            r = subprocess.run(AP_CMD + [cmd], capture_output=True, text=True, timeout=40)
+        except FileNotFoundError:
+            raise RuntimeError("sudo がありません")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("アクセスポイントの切り替えが終わりません")
+        try:
+            j = json.loads((r.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            err = (r.stderr or "").strip()
+            if "password" in err or "sudo" in err:
+                err = "hexa-ap を使う許可がありません。sh cpz/install.sh をもう一度実行してください"
+            raise RuntimeError(err or "hexa-ap が動きません (sh cpz/install.sh で入れ直してください)")
+        if not j.get("ok"):
+            raise RuntimeError(j.get("err") or "アクセスポイントを切り替えられません")
+        if cmd != "status":
+            log(f"event AP {cmd}: {j.get('ssid')} {j.get('ip')}")
+        return j
+
+    def ap_teach(self):
+        """いまの AP の名前とパスワードを、USB でつないでいる本体に2つ目の Wi-Fi として教える"""
+        j = self.ap("status")
+        return self.dev_wifi2(j.get("ssid"), j.get("pass"))
 
     def _suggest(self, name):
         files = (self.link.devlist or {}).get("files") or []
@@ -877,6 +988,8 @@ class Handler(BaseHTTPRequestHandler):
                                   {"Content-Disposition": f"attachment; filename*=UTF-8''{fn}"})
             if path == "/api/device/list":
                 return self._send(200, HUB.dev_list())
+            if path == "/api/ap":
+                return self._send(200, HUB.ap("status"))
             return self._send(404, {"ok": False, "err": "not found"})
         except FileNotFoundError:
             self._err("見つかりません", 404)
@@ -923,6 +1036,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, HUB.link.request(packet(T_ROTATE, [rot]), lambda r: "dev" in r))
             if path == "/api/device/ping":
                 return self._send(200, HUB.link.request(packet(T_PING), lambda r: "dev" in r))
+            if path == "/api/device/config":                 # {"autorot":true,"shake":false,"psave":true,"rotreset":true}
+                return self._send(200, HUB.dev_config(j))
+            if path == "/api/device/wifi2":                  # {"ssid":..,"pass":..} USB の時だけ
+                return self._send(200, HUB.dev_wifi2(j.get("ssid"), j.get("pass")))
+            if path == "/api/ap":                            # {"on":true|false}
+                return self._send(200, HUB.ap("on" if j.get("on") else "off"))
+            if path == "/api/ap/teach":
+                return self._send(200, HUB.ap_teach())
             return self._send(404, {"ok": False, "err": "not found"})
         except (ValueError, RuntimeError, KeyError, FileNotFoundError) as e:
             self._err(e if not isinstance(e, FileNotFoundError) else "見つかりません")
@@ -960,6 +1081,11 @@ class Handler(BaseHTTPRequestHandler):
             if ws.open:
                 ws.send(ln)
         HUB.link.listeners.append(fwd)
+        me = id(ws)
+        holding = False
+        def busy_reply():
+            # 本体と同じ形で返す (STUDIO の返事待ちがそのまま「busy」で失敗する)
+            ws.send(json.dumps({"ok": False, "err": "busy"}))
         try:
             while True:
                 m = ws.recv()
@@ -972,8 +1098,26 @@ class Handler(BaseHTTPRequestHandler):
                         # ブラウザのコマが届けば本体が自分でやめるので、ここでは何も送らない
                         HUB.player.stop(tell_device=False)
                     HUB.web_last = time.time()
+                    # v0.9.6: ファイル転送 (BEGIN〜END) の間は xfer_lock を持つ。本体から見ると CPZ の転送も
+                    # ブラウザの転送も同じ口から来るので、ここで順番を守らないと中身が混ざる
+                    ts = pkt_types(data)
+                    if T_BEGIN in ts:
+                        if not holding:
+                            if not HUB.xfer_lock.acquire(timeout=0.5):
+                                busy_reply(); continue
+                            holding = True
+                        HUB.relay_hold = {"ws": me, "t": time.time()}
+                    elif T_DATA in ts or T_END in ts:
+                        if not holding or not HUB.relay_hold or HUB.relay_hold.get("ws") != me:
+                            holding = False
+                            continue                 # 断った (or 取り上げられた) 転送の残りは本体へ送らない
+                        HUB.relay_hold["t"] = time.time()
                     if not HUB.link.send(data):
                         ws.send(json.dumps({"ok": False, "hub": "cpz", "err": "本体がつながっていません"}, ensure_ascii=False))
+                    if holding and T_END in ts:
+                        holding = False
+                        HUB.relay_hold = None
+                        HUB.xfer_lock.release()
                 elif op == 1:
                     try:
                         j = json.loads(data.decode())
@@ -983,6 +1127,12 @@ class Handler(BaseHTTPRequestHandler):
                         ws.send(json.dumps(HUB.status(), ensure_ascii=False))
         finally:
             ws.open = False
+            if holding and HUB.relay_hold and HUB.relay_hold.get("ws") == me:
+                HUB.relay_hold = None
+                try:
+                    HUB.xfer_lock.release()
+                except RuntimeError:
+                    pass
             if fwd in HUB.link.listeners:
                 HUB.link.listeners.remove(fwd)
 

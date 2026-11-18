@@ -10,6 +10,8 @@
 //   tx=11       送信の強さ (dBm, 2〜20)。既定は 15。下げると電流の山が小さくなる
 //   key=合言葉  (v0.9.4) Wi-Fi でつないできた相手に AUTH を求める。8文字以上を推奨 (32字まで)
 //               pass と同じく本体に覚えさせて ***** に書き換える。key= を空にすると合言葉なし
+//   ssid2= / pass2=  (v0.9.6) 2つ目の Wi-Fi (イベント用の CPZ のアクセスポイントなど)。
+//               1つ目に 15 秒つながらなければ 2つ目へ、を交互にくり返す。ssid2= を空にすると消す
 #pragma once
 #include <stddef.h>
 #include <string.h>
@@ -19,11 +21,15 @@ struct HxmWifiCfg {
   char pass[65];
   char name[32];
   char key[33];
+  char ssid2[33];
+  char pass2[65];
   bool hasSsid;       // ssid= の行がある
   bool hasPass;       // pass= の行がある
   bool passMasked;    // pass が ***** (書き換え済み)
   bool hasKey;        // key= の行がある
   bool keyMasked;     // key が ***** (書き換え済み)
+  bool hasSsid2;      // ssid2= の行がある
+  bool pass2Masked;   // pass2 が ***** (書き換え済み)
   int  sleep;         // -1=書いてない / 0=off / 1=on
   int  tx;            // -1=書いてない / dBm
 };
@@ -72,6 +78,12 @@ static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
       c->hasPass = true; c->passMasked = hxm_all_stars(v, vn);
       size_t m = vn < 64 ? vn : 64; memcpy(c->pass, v, m); c->pass[m] = 0;
       if (c->passMasked) c->pass[0] = 0;
+    } else if (hxm_key_is(k, kn, "ssid2")) {
+      c->hasSsid2 = true; size_t m = vn < 32 ? vn : 32; memcpy(c->ssid2, v, m); c->ssid2[m] = 0;
+    } else if (hxm_key_is(k, kn, "pass2")) {
+      c->pass2Masked = hxm_all_stars(v, vn);
+      size_t m = vn < 64 ? vn : 64; memcpy(c->pass2, v, m); c->pass2[m] = 0;
+      if (c->pass2Masked) c->pass2[0] = 0;
     } else if (hxm_key_is(k, kn, "key")) {
       c->hasKey = true; c->keyMasked = hxm_all_stars(v, vn);
       size_t m = vn < 32 ? vn : 32; memcpy(c->key, v, m); c->key[m] = 0;
@@ -95,18 +107,16 @@ static inline bool hxm_wifi_parse(const char* t, size_t n, HxmWifiCfg* c) {
   return c->hasSsid;
 }
 
-/// pass= と key= の値を ***** にした中身を out に作る。書き換える必要が無ければ 0 を返す
+/// pass= / pass2= / key= の値を ***** にした中身を out に作る。書き換える必要が無ければ 0 を返す
 ///   (それぞれ最初の1行だけ。行は前から順に見るので、範囲は前から並ぶ)
 static inline size_t hxm_wifi_mask(const char* t, size_t n, char* out, size_t cap) {
-  size_t vs[2], ve[2]; int cnt = 0; bool gotPass = false, gotKey = false;
+  size_t vs[3], ve[3]; int cnt = 0; bool got[3] = {false, false, false};
   hxm_wifi_lines(t, n, [&](const char* k, size_t kn, const char* v, size_t vn, size_t, size_t, size_t vstart) {
     if (vn == 0 || hxm_all_stars(v, vn)) return;
-    bool isPass = hxm_key_is(k, kn, "pass") || hxm_key_is(k, kn, "password");
-    bool isKey  = hxm_key_is(k, kn, "key");
-    if ((isPass && !gotPass) || (isKey && !gotKey)) {
-      if (isPass) gotPass = true; else gotKey = true;
-      vs[cnt] = vstart; ve[cnt] = vstart + vn; cnt++;
-    }
+    int kind = (hxm_key_is(k, kn, "pass") || hxm_key_is(k, kn, "password")) ? 0
+             : hxm_key_is(k, kn, "key") ? 1 : hxm_key_is(k, kn, "pass2") ? 2 : -1;
+    if (kind < 0 || got[kind]) return;
+    got[kind] = true; vs[cnt] = vstart; ve[cnt] = vstart + vn; cnt++;
   });
   if (cnt == 0) return 0;
   size_t total = n;

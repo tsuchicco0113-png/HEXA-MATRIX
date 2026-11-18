@@ -234,7 +234,50 @@ let pvT2=0;
 $("progName").oninput=e=>{ prog.name=e.target.value; progSave(); };
 
 // ---- 再生 ----
-const P={frames:[],i:0,timer:0,playing:false,next:0,lastB:null,lastBri:-1,total:0,mode:"scene"};
+const P={frames:[],i:0,timer:0,playing:false,next:0,lastB:null,lastBri:-1,total:0,mode:"scene",
+  gen:0, clip:false, clipPending:false, clipWant:null, clipBusy:false, quiet:false};   // quiet: CPZ が流し始めた (0xFE を送らない)
+// v0.9.6: 「実機にも流す」は、ファーム v0.6 以上ならコマ列をまとめて本体へ送り (一時再生)、本体の時計で流してもらう。
+//   1コマずつだと Wi-Fi (CPZ 経由) で届き方がばらついてカクつくため。送っている間と本体が流している間は1コマずつ送らない。
+//   送れなかった時・大きすぎる時 (256KB 超)・古いファームは、今までどおり1コマずつ
+const CLIP_PV_MAX=256*1024;
+function clipSend(frames){
+  P.clipWant=null; P.quiet=false;
+  if(!writer || !$("pLive").checked || curView!=="prog" || !clipOK() || devBusy){ P.clip=false; P.clipPending=false; return; }
+  const data=bakeBin(frames,!$("pLoop").checked);
+  if(data.length>CLIP_PV_MAX){ P.clip=false; P.clipPending=false; return; }
+  P.clipWant={data:data, loop:$("pLoop").checked, gen:P.gen};
+  P.clipPending=true;
+  clipPump();
+}
+async function clipPump(){
+  if(P.clipBusy) return;
+  P.clipBusy=true;
+  while(P.clipWant){
+    const w=P.clipWant; P.clipWant=null;
+    try{
+      await xferFile(w.loop?"@live":"@once",w.data);
+      if(w.gen===P.gen && P.playing && !P.clipWant){
+        P.clip=true; P.clipPending=false;
+        clearTimeout(P.timer); P.i=0; P.next=performance.now(); tick();   // 本体が頭から流し始めたので、こちらも頭からそろえる
+      }else if(!P.clipWant && !P.clipPending && !P.clip && !P.quiet && writer){
+        // 送っている間に止められた: 途中の 0xFE は受け取りの途中で効かない (END で流し始める) ので、もう一度止める
+        tx(packet(HXF.PLAY,[0xFE]));
+      }
+    }catch(e){
+      if(w.gen===P.gen && !P.clipWant){
+        P.clip=false; P.clipPending=false; P.lastB=null; P.lastBri=-1;
+        log("実機へまとめて送れなかったので、1コマずつ流します: "+e.message,"err");
+      }
+    }
+  }
+  P.clipBusy=false;
+}
+/// 本体の一時再生をやめさせる (プレビューを止めた / 実機にも流す を外した)
+function clipStopDevice(){
+  const had=P.clip||P.clipPending;
+  P.clip=false; P.clipPending=false; P.clipWant=null;
+  if(had && writer) tx(packet(HXF.PLAY,[0xFE]));
+}
 function drawBig(b,bri){
   const cv=$("ppv"), g=cv.getContext("2d"), s=cv.width/N;
   g.fillStyle="#000"; g.fillRect(0,0,cv.width,cv.height);
@@ -247,11 +290,13 @@ function drawBig(b,bri){
 }
 function toDevice(f){
   if(!writer || !$("pLive").checked || curView!=="prog") return;
+  if(P.clip || P.clipPending) return;            // 本体が自分で流している (まとめて送った) / 送っている最中
   if(f.bri!==P.lastBri){ tx(packet(HXM.BRIGHT,[f.bri])); P.lastBri=f.bri; }
   if(!P.lastB || !sameF(P.lastB,f.b)){ queueFrame(f.b); P.lastB=f.b; }
 }
 function stopPlay(){
   clearTimeout(P.timer); P.playing=false; $("pPlay").textContent="▶ 再生";
+  P.gen++; clipStopDevice();
   if(writer){ tx(packet(HXM.BRIGHT,[$("bri").value*16-1])); P.lastBri=-1; }
 }
 function startPlay(frames,mode){
@@ -259,6 +304,7 @@ function startPlay(frames,mode){
   P.frames=frames; P.i=0; P.mode=mode; P.playing=true; P.lastB=null; P.lastBri=-1;
   P.total=frames.reduce((a,f)=>a+f.ms,0);
   $("pPlay").textContent="■ 止める";
+  P.gen++; clipSend(frames);
   P.next=performance.now(); tick();
 }
 function tick(){
@@ -306,7 +352,11 @@ function syncLoopUI(){
   $("pRepeat").value=on?"loop":"once";
   $("loopNote").textContent=on?"本体では最後まで流したら頭から繰り返します":"本体では1回流したら消灯して止まります (Bでもう一度)";
 }
-$("pLoop").onchange=e=>{ prog.loop=e.target.checked; syncLoopUI(); progSave(); };
+$("pLoop").onchange=e=>{ prog.loop=e.target.checked; syncLoopUI(); progSave(); if(P.playing){ P.gen++; clipSend(P.frames); } };
+$("pLive").onchange=e=>{
+  if(!e.target.checked) clipStopDevice();                     // 外したら本体の一時再生もやめる
+  else if(P.playing){ P.gen++; P.lastB=null; P.lastBri=-1; clipSend(P.frames); }
+};
 $("pRepeat").onchange=e=>{ prog.loop=e.target.value!=="once"; syncLoopUI(); progSave(); };
 
 // ---- 保存・書き出し ----
