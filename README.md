@@ -1,4 +1,4 @@
-# HEXA MATRIX (v0.12)
+# HEXA MATRIX (v0.13)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
@@ -333,13 +333,18 @@ CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩
 - 安全: 本体は WALK が 0.5 秒来ないと止まる。ハブは CPZ アプリからの頼み直しが 1.5 秒来ないと止める。アプリを閉じても止まる。
   本体のボタンを押しても止まる
 - 速さの上限は既定 60% (原作のシミュレーションで 100% は跳ねて進みが落ちるため)
+- **箱庭のキャラで歩く (ファーム v0.13)**: 顔 7 (CPZ のキー 7) = 箱庭 (HEXA CUBE) と同じキャラ・同じエンジン。
+  「おまかせの顔」を「箱庭のキャラ」にすると、いつもキャラで出す (`wchar=1`、本体に覚える)。
+  歩いている間はキャラもその場で脚を動かして歩く (前進は右向き、後退は左向き)。傾き・揺れはそのまま効き、
+  段差でガタッとすると跳ねる、持ち上げて振る・その場で速く回ると目が回る、止まって静かにしていると寝る、歩き出すと起きてびっくり。
+  止まっている時は本体の A でなでる・C でつつく (箱庭と同じ)。キャラは STUDIO の「箱庭」で作って本体に保存したもの (無ければ組み込み)
 - 「向き」はジャイロで数えた床の上の回転 (度)。その場で回る歩かせ方を探す・角度で止める、の下準備です (`yawzero=1` で 0)
 
 ### パケット・API
 
 - WALK (0x08) len=3: int8 速さ -100〜100% / u8 有効時間 (0.1 秒単位、0 は 0.5 秒) / u8 顔 (0=おまかせ、1〜5、0xFF=そのまま)。返事なし
-- CONFIG: `walker=0/1` `servo=GPIO (-1 で使わない)` `strim=µs` `sinv=0/1` `wmax=%` `yawzero=1` `strimtest=1`
-- PING: `"walk":{"walker","pin","trim","inv","max","spd","us","show","face","cmds","tmo","yaw","wz"}`
+- CONFIG: `walker=0/1` `servo=GPIO (-1 で使わない)` `strim=µs` `sinv=0/1` `wmax=%` `yawzero=1` `strimtest=1` `wchar=0/1` (v0.13)
+- PING: `"walk":{"walker","pin","trim","inv","max","spd","us","show","face","wchar","cst","cmds","tmo","yaw","wz"}` (cst = キャラの状態、-1 はキャラを出していない)
 - ハブ: `POST /api/walk {"speed":40,"face":2}` (1.5 秒ごとに頼み直す) / `POST /api/walk/stop`
 - PC でのテスト: `g++ -std=c++17 tests/walk_test.cpp && ./a.out`、`python3 tests/fakecm.py --fw 0.12.0`
 

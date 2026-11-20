@@ -49,6 +49,8 @@ struct HxcIn {
   int16_t gx = 0, gy = 1000, gz = 0;   // mg、画面の向き
   int16_t wz = 0;                      // 画面に垂直な軸まわりの回転 (deg/s、右回り +)。slosh 用
   uint8_t ev = 0;                      // HXC_TAP など
+  int8_t  run = 0;                     // その場で歩く (-1 左向き / 0 / +1 右向き)。歩くロボットに載せた時 (v0.13)。
+                                       // 箱は動かさず、脚だけ動かす (STUDIO の JS 版は使わない。0 なら今までと同じ動き)
 };
 
 struct HxcWorld {
@@ -195,7 +197,7 @@ struct HxcWorld {
     // 静かさ: ならした値からのずれ
     int dmove = abs16(in.gx - lgx) + abs16(in.gy - lgy) + abs16(in.gz - lgz);
     lgx += (in.gx - lgx) / 8; lgy += (in.gy - lgy) / 8; lgz += (in.gz - lgz) / 8;
-    bool moving = dmove > 90 || in.ev;
+    bool moving = dmove > 90 || in.ev || in.run;
     if (moving) still = 0; else if (still < 0xFFFF) still++;
 
     // 重力の向き (4方向)。はっきり傾いて 0.3 秒続いたら変える
@@ -271,12 +273,13 @@ struct HxcWorld {
     // 状態
     int32_t vt = vx * tdx + vy * tdy, vn = vx * gdx + vy * gdy;
     if (abs32(vt) > 20) face = vt > 0 ? 1 : -1;
+    else if (in.run && grounded) face = in.run > 0 ? 1 : -1;
     if (dizzyT) { dizzyT--; enter(HXC_DIZZY); }
     else if (wakeT) { wakeT--; enter(HXC_WAKE); }
     else if (landT) { landT--; enter(HXC_LAND); }
     else if (!grounded) enter(HXC_AIR);
     else if (happyT) { happyT--; enter(HXC_HAPPY); }
-    else if (abs32(vt) > 18) enter(HXC_WALK);
+    else if (abs32(vt) > 18 || (in.run && grounded)) enter(HXC_WALK);
     else if (still > pr.sleepAfter) enter(HXC_SLEEP);
     else enter(HXC_IDLE);
     (void)vn;

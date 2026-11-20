@@ -31,7 +31,7 @@ FW = arg("--fw", "0.10.0"); WIN = int(arg("--win", "16")); RTT = float(arg("--rt
 BUSY = int(arg("--busy", "0")); KEY = arg("--key", ""); authed = not KEY
 CFG = {"autorot": 0, "shake": 0, "psave": 1}; SSID2 = [""]; LEARN = [0]
 HAKO = {"set": "auto", "chg": 180, "hflip": 0, "imuhi": 1, "peek": 3, "deep": 90, "anymg": 60, "plog": 0}
-WALK = {"walker": 0, "pin": -1, "trim": 0, "inv": 0, "max": 60, "spd": 0, "us": 0, "show": 0, "face": 0,
+WALK = {"walker": 0, "wchar": 0, "pin": -1, "trim": 0, "inv": 0, "max": 60, "spd": 0, "us": 0, "show": 0, "face": 0,
         "cmds": 0, "tmo": 0, "yaw": 0.0, "wz": 0.0}       # v0.12 歩行 (速さ1%あたり 1.5 度/秒 回るふり)
 WALK_T = [0.0]
 Q = []; stats_q = {"max": 0, "data": 0}       # 遅らせて返す返事 (送る時刻, 中身)
@@ -87,7 +87,7 @@ def handle(t, p):
             elif k == "hakoreset": pass
             elif k == "hakoev" and fwv() >= (0, 11, 1):
                 open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} HAKOEV {v}\n"); return out({"ok": True, "hakoev": "try" in HAKO})
-            elif k in ("walker", "sinv") and fwv() >= (0, 12, 0): WALK["walker" if k == "walker" else "inv"] = 1 if v[:1] in "1ot" else 0
+            elif k in ("walker", "sinv", "wchar") and fwv() >= (0, 12, 0): WALK[{"walker": "walker", "sinv": "inv", "wchar": "wchar"}[k]] = 1 if v[:1] in "1ot" else 0
             elif k == "servo" and fwv() >= (0, 12, 0): WALK["pin"] = int(v) if int(v) not in (0, 1, 12, 13) else -1
             elif k == "strim" and fwv() >= (0, 12, 0): WALK["trim"] = max(-150, min(150, int(v)))
             elif k == "wmax" and fwv() >= (0, 12, 0): WALK["max"] = max(10, min(100, int(v)))

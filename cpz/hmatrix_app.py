@@ -9,7 +9,7 @@ CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd
   2 ライブラリ: CPZ に置いた番組 (STUDIO の「CPZに置く」) を CPZ から流す / 本体SDへ送る
   3 本体      : CoreMatrix の中の番組を選んで流す・止める・消す
   4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / 箱庭 / 充電 / イベントAP / スマホから開くQR
-  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 SPACE 止まる (ファーム v0.12〜)
+  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 SPACE 止まる 1〜7 顔 (7 = 箱庭のキャラ) (ファーム v0.12〜)
 右側の 16×16 は、いま CPZ から流している絵
 
 共通: ESC = ホームへ (ホームでは終了確認)  方向キー = F(↑) X(↓) Z(←) C(→)
@@ -37,7 +37,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -49,7 +49,7 @@ SCREENS = [M_SAY, M_LIB, M_DEV, M_SET, M_WALK]
 NAMES = {M_SAY: "ことば", M_LIB: "ライブラリ", M_DEV: "本体", M_SET: "設定", M_WALK: "歩く"}
 DESC = {M_SAY: "打った文字をすぐ流す", M_LIB: "CPZに置いた番組", M_DEV: "CoreMatrixの中の番組", M_SET: "向き・省電力・イベントAP",
         M_WALK: "Strider を歩かせる"}
-WALK_FACES = ["おまかせ", "ふつう", "にっこり", "びっくり", "ねむい", "おこ"]
+WALK_FACES = ["おまかせ", "ふつう", "にっこり", "びっくり", "ねむい", "おこ", "キャラ"]   # キャラ = 箱庭のキャラ (ファーム v0.13〜)
 SERVO_PINS = [-1, 23, 22, 24, 29, 5, 6, 7, 8, 10, 11]   # M5-Bus の GPIO (0/1 は I2C、12/13 は USB なので使わない)
 
 SHOWS = [("scrollL", "横流し"), ("static", "止めて"), ("wave", "波"), ("bounce", "往復"),
@@ -715,7 +715,7 @@ class App:
             self.stop()
 
     # ---- 歩く (v0.11、ファーム v0.12〜)
-    WALK_KEYS = ["speed", "face", "walker", "servo", "strim", "sinv", "wmax", "yawzero"]
+    WALK_KEYS = ["speed", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "yawzero"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -724,6 +724,7 @@ class App:
         pin = w.get("pin", -1)
         rows = {"speed": ("↑↓で出す速さ", f"{self.walk['set']}%"),
                 "face": ("顔", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
+                "wchar": ("おまかせの顔", ("箱庭のキャラ" if w.get("wchar") else "スタックチャン") if "wchar" in w else "要v0.13"),
                 "walker": ("歩くロボット", "入 (Grove 5V)" if w.get("walker") else "切"),
                 "servo": ("サーボの GPIO", "なし" if pin < 0 else f"G{pin}"),
                 "strim": ("中立の補正", f"{w.get('trim', 0):+d}µs"),
@@ -799,7 +800,7 @@ class App:
             self.walk_send(0); return
         if val == "TAB":
             self.walk_i = (self.walk_i + 1) % len(self.WALK_KEYS); return
-        if kind == "CHAR" and val in "123456":
+        if kind == "CHAR" and val in "1234567":
             self.walk["face"] = int(val) - 1; self.walk_send(); return
         key = self.WALK_KEYS[self.walk_i]
         w = (self.hub.st.get("dev") or {}).get("walk") or {}
@@ -815,6 +816,9 @@ class App:
                 self.walk_send(self.walk["set"] if self.walk["speed"] > 0 else -self.walk["set"])
         elif key == "face":
             self.walk["face"] = (self.walk["face"] + step) % len(WALK_FACES); self.walk_send()
+        elif key == "wchar":
+            on = not w.get("wchar")
+            cfgcall({"wchar": on}, "おまかせの顔を箱庭のキャラにしました" if on else "おまかせの顔をスタックチャンにしました")
         elif key == "walker":
             on = not w.get("walker")
             cfgcall({"walker": on}, "歩くロボットにしました (電池でも箱庭に入りません・Grove 5V 入)" if on else "歩くロボットをやめました")

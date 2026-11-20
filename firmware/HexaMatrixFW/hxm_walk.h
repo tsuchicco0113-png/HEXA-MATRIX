@@ -5,7 +5,7 @@
 //
 //   WALK (0x08) len=3:  int8 速さ (-100〜100 %、正=前進、0=止まる)
 //                       u8   この指令の有効時間 (0.1 秒単位。0 なら 5 = 0.5 秒)
-//                       u8   顔 (0=おまかせ / 1〜5 / 0xFF=そのまま)
+//                       u8   顔 (0=おまかせ / 1〜5 / 6=箱庭のキャラ (v0.13) / 0xFF=そのまま)
 //     返事はしない (FRAME と同じく連続で送るため)。有効時間内に次の WALK が来なければ止まる
 //     (CPZ が落ちた・Wi-Fi が切れた時に歩き続けない)。状態は PING の "walk" で見る
 //
@@ -91,7 +91,9 @@ struct HxmWalk {
 //   小さな黒目 2 つ (2x2、間隔 6 マス) と横一文字の口 (4 マス)。Avatar の比率 (320x240 で目 x=90/230 y=93、口 y=148) に合わせる
 //   ・まばたき (3.2 秒ごと)・息 (上下 1 マス、歩くと速い)・目線 (時々左右に 1 マス)
 enum : uint8_t { HXW_FACE_AUTO = 0, HXW_FACE_NORMAL = 1, HXW_FACE_SMILE = 2, HXW_FACE_WOW = 3, HXW_FACE_SLEEPY = 4, HXW_FACE_ANGRY = 5,
-                 HXW_FACE_N = 6 };
+                 HXW_FACE_CHAR = 6,      // 箱庭のキャラ (hxm_char.h のエンジンで動かす。顔の絵はファーム側)
+                 HXW_FACE_N = 7 };
+
 
 /// face: 1〜5、dir: 進む向き (-1/0/1、0 以外は歩いている)、t: ms。rows に 16 行を書く
 static inline void hxm_walk_face(uint16_t* rows, uint8_t face, int dir, uint32_t t) {

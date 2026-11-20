@@ -85,6 +85,12 @@
 //
 //   v0.12.1: 歩行の顔を純正スタックチャン (M5Stack-Avatar) 風に。小さな黒目 2 つと横一文字の口、
 //            まばたき・息 (上下)・目線、歩いている間はにっこりして口パク
+//
+//   v0.13.0: 歩行中に箱庭のキャラ (HEXA CUBE と同じキャラ・同じエンジン) を出せる
+//   ・顔 6 = キャラ。CONFIG wchar=1 にすると「おまかせ」もキャラになる (本体に覚える)
+//   ・歩いている間はキャラもその場で脚を動かして歩く (前進は右向き、後退は左向き)
+//   ・本体の傾き・揺れはそのまま効く: 段差でガタッとすると跳ねる、持ち上げて振ると目が回る、
+//     その場で速く回ると目が回る、止まって静かにしていると寝る (寝息)、また歩き出すと起きてびっくり
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -107,7 +113,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.12.1";
+static const char* FW_VER = "0.13.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -135,9 +141,15 @@ static int8_t     servoPinOn = -1;     // いまパルスを出すのにつな�
 static uint16_t   servoUs = 0;         // いま出しているパルス (0 = 出していない)
 static uint32_t   walkIdleAt = 0;      // 止まった時刻 (ねむい顔)
 static float      yawDeg = 0.f, yawRate = 0.f;
+static bool       cfgWalkChar = false; // おまかせの顔を箱庭のキャラにする
+static bool       wchOn = false;       // 歩行中にキャラを動かしている
+static bool       wchReady = false;    // キャラを用意した (起動してから1回)
+static int8_t     wchPace = 1;         // キャラが進む向き
+static uint32_t   wchTickAt = 0, wchSpinMs = 0;
 static uint32_t   yawAt = 0;
 static const uint8_t SERVO_BITS = 14;
 static void walkStop(bool hide);
+struct HxcIn; static bool hakoInput(HxcIn& in, uint32_t now); static void hakoReset();
 static HxmParser* pk = &usbParser;     // いま処理しているパケット (USB か Wi-Fi か)
 static Print*     out = &Serial;       // 返事を返す先 (パケットが来た側)
 
@@ -331,9 +343,9 @@ static void sendStatus() {
               hcOk ? hcName : "", hakoPreview ? "true" : "false");
   // v0.12: 歩行
   out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
-              "\"show\":%d,\"face\":%u,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f}}\n",
+              "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
-              walkShow ? 1 : 0, walk.face, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate);
+              walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -781,11 +793,42 @@ static void walkStop(bool hide) {
     walk.pulsing = false;
   }
   if (servoUs) servoWrite(0);
-  if (hide) walkShow = false;
+  if (hide) { walkShow = false; wchOn = false; }
+}
+/// 箱庭のキャラで出すか
+static bool walkCharMode() { return walk.face == HXW_FACE_CHAR || (walk.face == HXW_FACE_AUTO && cfgWalkChar); }
+/// 箱庭のキャラを 60Hz で動かして描く (箱庭と同じエンジン・同じ入力 + 歩いている間の「床に沿った傾き」)
+static void walkCharTick(uint32_t now) {
+  if (!wchReady) {                                     // 起動して初めて: 保存してあるキャラ (無ければ組み込み)
+    hakoReset(); wchReady = true;
+  }
+  if (!wchOn) {                                        // 出し始め: いまの立て方を「下」として覚える (覚えた向きが無い時)
+    wchOn = true; wchTickAt = now;
+    float ax, ay, az, a; M5.Imu.update();
+    if (imuOk && M5.Imu.getAccel(&ax, &ay, &az) && hxm_tilt(ax, ay, az, &a)) hakoDown0 = a;
+  }
+  int n = 0;
+  while ((int32_t)(now - wchTickAt) >= 16 && n < 4) {
+    wchTickAt += 16; n++;
+    HxcIn in;
+    if (!hakoInput(in, now)) continue;
+    if (walk.moving) in.run = wchPace;                // その場で歩く (脚を動かす。前進は右向き、後退は左向き)
+    if (fabsf(yawRate) > 150.f) {                     // その場で速く回った (0.5 秒続いた) → 目が回る
+      if (!wchSpinMs) wchSpinMs = now;
+      else if ((int32_t)(now - wchSpinMs) > 500) { in.ev |= HXC_SHAKE; wchSpinMs = now + 100000; }
+    } else wchSpinMs = 0;
+    hako.step(in);
+  }
+  if ((int32_t)(now - wchTickAt) > 100) wchTickAt = now;
+  uint8_t f[32]; hako.render(f);
+  int bri = hako.sleeping() ? MASTER_LV[0] / 2 : MASTER_LV[masterIdx];
+  if ((memcmp(f, frame, 32) || bri != outBri) && (int32_t)(now - holdUntil) >= 0) { memcpy(frame, f, 32); setOut(bri); drawFrame(); }
 }
 static void walkDraw(uint32_t now) {
+  if (walkCharMode()) { walkCharTick(now); return; }
+  wchOn = false;
   uint8_t f = walk.face ? walk.face : hxm_walk_autoface(walk.moving, now - walkIdleAt);
-  if (f >= HXW_FACE_N) f = HXW_FACE_NORMAL;
+  if (f >= HXW_FACE_N || f == HXW_FACE_CHAR) f = HXW_FACE_NORMAL;
   int dir = walk.moving ? (walk.spd > 0 ? 1 : -1) : 0;
   uint16_t rows[16];
   hxm_walk_face(rows, f, dir, now);
@@ -803,7 +846,10 @@ static void handleWalk() {
     walkShow = true; walkIdleAt = now;
   }
   bool was = walk.moving;
+  int8_t prevSpd = walk.spd;
   walk.command((int8_t)pk->buf[0], pk->buf[1], pk->buf[2], now);
+  if (walk.moving) wchPace = walk.spd > 0 ? 1 : -1;   // 後退はキャラも逆向き
+  (void)prevSpd;
   if (was && !walk.moving) walkIdleAt = now;
   servoWrite(hxm_walk_us(wcfg, walk.spd));
   walkDraw(now);
@@ -827,7 +873,7 @@ static void walkTick(uint32_t now) {
   if (!walk.moving && !walk.pulsing && servoUs) servoWrite(0);
   if (walkShow && (int32_t)(now - holdUntil) >= 0) {
     static uint32_t lastFace = 0;
-    if ((int32_t)(now - lastFace) >= 40) { lastFace = now; walkDraw(now); }
+    if ((int32_t)(now - lastFace) >= (walkCharMode() ? 16 : 40)) { lastFace = now; walkDraw(now); }
   }
 }
 static void loadWalkCfg() {
@@ -836,6 +882,7 @@ static void loadWalkCfg() {
   wcfg.trim  = prefs.getShort("wtrm", 0);
   wcfg.inv   = prefs.getBool("winv", false);
   wcfg.maxPct = prefs.getUChar("wmax", 60);
+  cfgWalkChar = prefs.getBool("wch", false);
 }
 
 // ---------------------------------------------------------------- 向き・振り (v0.9.6)
@@ -948,6 +995,7 @@ static void handleConfig() {
       else if (!strcmp(k, "sinv")) { wcfg.inv = on; prefs.putBool("winv", on); }
       else if (!strcmp(k, "wmax")) { int n = atoi(v); wcfg.maxPct = (uint8_t)(n < 10 ? 10 : n > 100 ? 100 : n); prefs.putUChar("wmax", wcfg.maxPct); }
       else if (!strcmp(k, "yawzero")) { if (on) yawDeg = 0.f; evOnly = true; }
+      else if (!strcmp(k, "wchar")) { cfgWalkChar = on; prefs.putBool("wch", on); }
       else if (!strcmp(k, "strimtest")) {                           // 中立を確かめる: いまの strim の中立を 2 秒出す
         if (on && wcfg.pin >= 0) { walk.command(0, 20, 0xFF, millis()); walk.pulsing = true; walk.stopAt = millis() + 1700; servoWrite(hxm_walk_us(wcfg, 0)); }
       }
@@ -1221,6 +1269,10 @@ static void buttons() {
   if (walkShow && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed())) {   // v0.12: 歩いていたらまず止める
     bool was = walk.moving; walkStop(false); walkIdleAt = millis();
     if (was) { flashText("II", 400); return; }
+  }
+  if (walkShow && walkCharMode() && !walk.moving) {         // v0.13: 止まっている時は箱庭と同じ (A なでる / C つつく)
+    if (M5.BtnA.wasClicked()) { hakoEv |= HXC_PET; return; }
+    if (M5.BtnC.wasClicked()) { hakoEv |= HXC_POKE; return; }
   }
   if (M5.BtnA.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur - 1, true); }
   if (M5.BtnC.wasClicked()) nextProgram();

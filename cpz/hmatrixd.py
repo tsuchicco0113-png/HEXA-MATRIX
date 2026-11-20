@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -837,7 +837,7 @@ class Hub:
     # ---- 本体の設定 (ファーム v0.9.6〜)
     CFG_KEYS = ("autorot", "shake", "psave", "rotreset", "rotlearn")
     # v0.12 歩行: servo は GPIO 番号 (-1 で使わない)、strim は µs、wmax は %、ほかは true/false
-    WALK_KEYS = ("walker", "servo", "strim", "sinv", "wmax", "yawzero", "strimtest")
+    WALK_KEYS = ("walker", "servo", "strim", "sinv", "wmax", "yawzero", "strimtest", "wchar")
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
