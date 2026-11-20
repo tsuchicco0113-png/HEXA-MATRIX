@@ -16,3 +16,19 @@
 - 歩行 1 周で干渉なしを確認済み。ファームとアプリは本リポジトリの「歩行モード」(README) を参照
 
 ライセンス: `cm_variant.py` と STL は Stackchan Strider の派生物なので、原作の MIT ライセンス (`LICENSE-stackchan-strider`、Copyright (c) 2026 Yeq6X) に従います。
+
+## クランクの六角穴 (シャフトが抜ける・空回りする時)
+
+原作の `crank_x2.stl` は六角穴がシャフトより 0.25mm 大きく、プリンターによってはクランクが空回りしたり抜けたりします
+([GOROman さんの記事](https://note.com/goroman/n/nb9ee359c4d61) と h3c 版の修正に合わせた版)。
+`crank/` に、すきま (穴の二面幅 − シャフト 7.8mm) を変えたクランクを置いています。どれも穴の口に 0.3mm の面取り付き。
+
+| ファイル | 穴の二面幅 | すきま | 向き |
+|---|---|---|---|
+| `crank_x2_fit0.10.stl` | 7.90mm | 0.10 | 手で押し込む軽い圧入 (記事と同じ) |
+| `crank_x2_fit0.15.stl` | 7.95mm | 0.15 | 0.10 がきつくて入らない時 |
+| `crank_x2_fit0.20.stl` | 8.00mm | 0.20 | |
+| `crank_x2_fit0.25.stl` | 8.05mm | 0.25 | 原作と同じすきま (面取りだけ追加) |
+
+まず 0.10 を 1 個だけ刷って、シャフトに押し込めるか試すのがおすすめ (約 10 分・2.5g)。
+作り直し: 原作リポジトリで `STRIDER_CRANK_FIT=0.12 python walker/build.py` (design.py の `CRANK_SOCKET_CLEARANCE` / `CRANK_SOCKET_LEAD`)
