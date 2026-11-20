@@ -3,7 +3,8 @@
 giraffe_bay  : 胴(ｻｰﾎﾞﾍﾞｲ)。FS90R を軸下向きに吊る。底面・ﾋﾟﾝ穴・ﾎｰﾝ位置は cm_body と同じなので
                歩行台の dock_yoke と机用台座にそのまま載る。上は開いていて、ｻｰﾎﾞを上から入れてﾈｼﾞ止め。
 giraffe_neck : 首 + 頭の受け。下のｽｶｰﾄを胴に差し込み、横から M2 ﾀｯﾋﾟﾝｸﾞ 2 本で留める。
-               首は前上がりに傾き、頭(CoreMatrix + 18350x2)を前へ HEAD_DY、上へ NECK_RISE ずらす。
+               胴・首・頭は同じ太さでまっすぐ立て、まとめて前へ HEAD_DY ずらす(ｻｰﾎﾞ軸は後ろ寄り)。
+               首は頭を NECK_RISE だけ持ち上げる長さ。
 座標は cm_variant / cm_body と同じ(歩行台に載せた状態、Y = 前)。
 """
 from __future__ import annotations
@@ -20,7 +21,7 @@ import cm_body as b
 from design import box, cyl, rect
 
 NECK_RISE = float(os.environ.get("GIRAFFE_RISE", 30.0))   # 頭を上げる量(前の体ﾓｼﾞｭｰﾙ比)
-HEAD_DY = float(os.environ.get("GIRAFFE_DY", 18.0))       # 頭を前へ出す量
+HEAD_DY = float(os.environ.get("GIRAFFE_DY", 12.0))       # 頭を前へ出す量
 
 # ---------------------------------------------------------------- 胴
 WALL = 2.0
@@ -44,7 +45,7 @@ STACK_Y0 = -b.DEPTH / 2 + HEAD_DY
 STACK_Y1 = b.DEPTH / 2 + HEAD_DY
 GRIP_H = 12.0
 
-b.PIN_XY[:] = [(20.0, -10.0), (-20.0, -10.0)]    # 胴が細くなったのでﾄﾞｯｸのﾋﾟﾝを内側へ
+b.PIN_XY[:] = [(22.0, 22.0), (-22.0, 22.0)]      # 胴が前へずれたのでﾄﾞｯｸのﾋﾟﾝも前側へ(前後非対称)
 
 
 def _rr(hx, hy, r, cx=0.0, cy=0.0) -> CrossSection:
@@ -60,19 +61,21 @@ def _loft(sec0, z0, sec1, z1) -> Manifold:
     return Manifold.batch_hull([_slab(sec0, z0), _slab(sec1, z1 - 0.01)])
 
 
+def outline(clr: float = 0.0) -> CrossSection:
+    """胴・首・頭の受けで共通の外形(頭と同じ太さ、前へ HEAD_DY ずらす)。"""
+    return _rr(b.OUT_X - clr, b.OUT_Y - clr, b.BODY_R - clr, 0, HEAD_DY)
+
+
 @lru_cache(maxsize=None)
 def bay_part() -> Manifold:
-    outer = _rr(BAY_HX, BAY_HY, BAY_R)
-    inner = _rr(BAY_HX - WALL, BAY_HY - WALL, BAY_R - WALL)
-    bay = outer.extrude(BAY_TOP - FLOOR_BOT).translate((0, 0, FLOOR_BOT))
-    bay -= inner.extrude(BAY_TOP - FLOOR_TOP + 1).translate((0, 0, FLOOR_TOP))
+    bay = outline().extrude(BAY_TOP - FLOOR_BOT).translate((0, 0, FLOOR_BOT))
+    bay -= outline(WALL).extrude(BAY_TOP - FLOOR_TOP + 1).translate((0, 0, FLOOR_TOP))
     bay -= c.servo_cutout().extrude(FLOOR_TOP - FLOOR_BOT + 2).translate((0, 0, FLOOR_BOT - 1))
     bx = c.servo_body_x()
     for sx in (1, -1):
         bay -= cyl(c.SV_SCREW_PILOT, FLOOR_BOT - 1, FLOOR_TOP + 1, 24).translate((bx + sx * c.SV_EAR_PITCH / 2, 0, 0))
-        # 首を留める M2 の通し穴(横から)
-        bay -= d.cyl_x(1.15, sx * (BAY_HX - WALL - 0.5), sx * (BAY_HX + 1), 0.0, SCREW_Z, 24) if sx > 0 else \
-            d.cyl_x(1.15, -(BAY_HX + 1), -(BAY_HX - WALL - 0.5), 0.0, SCREW_Z, 24)
+    # 首を留める M2 の通し穴(左右の壁、横から)
+    bay -= d.cyl_x(1.15, -(b.OUT_X + 1), b.OUT_X + 1, HEAD_DY, SCREW_Z, 24) - box(-b.OUT_X + WALL + 0.5, b.OUT_X - WALL - 0.5, -50, 80, 0, 200)
     for x, y in b.PIN_XY:
         bay -= cyl(b.PIN_R + 0.25, FLOOR_BOT - 1, FLOOR_BOT + b.PIN_H + 0.4, 32).translate((x, y, 0))
     return bay
@@ -80,31 +83,22 @@ def bay_part() -> Manifold:
 
 @lru_cache(maxsize=None)
 def neck_part() -> Manifold:
-    # ｽｶｰﾄ(胴の内側に差さる)とﾌﾀ
-    s_out = _rr(BAY_HX - WALL - FIT, BAY_HY - WALL - FIT, BAY_R - WALL - FIT)
-    s_in = _rr(BAY_HX - WALL - FIT - SKIRT_T, BAY_HY - WALL - FIT - SKIRT_T, max(BAY_R - WALL - FIT - SKIRT_T, 1.0))
-    skirt = (s_out - s_in).extrude(SKIRT_H).translate((0, 0, BAY_TOP - SKIRT_H))
-    lid = _rr(BAY_HX, BAY_HY, BAY_R).extrude(LID_T).translate((0, 0, BAY_TOP))
-    # ﾈｼﾞが効く厚みのﾎﾞｽ
-    for sx in (1, -1):
-        x0 = sx * (BAY_HX - WALL - FIT)
-        skirt += box(min(x0, x0 - sx * 5.0), max(x0, x0 - sx * 5.0), -4.0, 4.0, BAY_TOP - SKIRT_H, BAY_TOP)
-    # 首: ﾌﾀの上 → 頭の受けの下まで、前上がりに傾いた角筒
-    z0 = BAY_TOP + LID_T - 0.5
-    zf = SHELF_BOT - FLARE_H
-    neck_top_y = HEAD_DY
-    neck = _loft(_rr(NECK_HX + 2, NECK_HY + 2, 8), z0, _rr(NECK_HX, NECK_HY, 7, 0, neck_top_y), zf)
-    # 頭の受けへ広がる部分(ﾌﾚｱ)
-    shelf_sec = _rr(b.OUT_X, b.OUT_Y, b.BODY_R, 0, HEAD_DY)
-    neck += _loft(_rr(NECK_HX, NECK_HY, 7, 0, neck_top_y), zf - 0.01, shelf_sec, SHELF_BOT + 0.01)
-    # 中空(ｹｰﾌﾞﾙ通し)
-    hollow = _loft(_rr(NECK_HX + 2 - NECK_IN, NECK_HY + 2 - NECK_IN, 6), z0 - LID_T - 1.0,
-                   _rr(NECK_HX - NECK_IN, NECK_HY - NECK_IN, 5, 0, neck_top_y), zf)
-    hollow += _loft(_rr(NECK_HX - NECK_IN, NECK_HY - NECK_IN, 5, 0, neck_top_y), zf - 0.01,
-                    _rr(b.OUT_X - 6, b.OUT_Y - 6, 4, 0, HEAD_DY), SHELF_BOT - 0.01)
+    # ｽｶｰﾄ(胴の内側に差さる)
+    skirt = (outline(WALL + FIT) - outline(WALL + FIT + SKIRT_T)).extrude(SKIRT_H).translate((0, 0, BAY_TOP - SKIRT_H))
+    for sx in (1, -1):   # ﾈｼﾞが効く厚みのﾎﾞｽ
+        x0 = sx * (b.OUT_X - WALL - FIT)
+        skirt += box(min(x0, x0 - sx * 5.0), max(x0, x0 - sx * 5.0), HEAD_DY - 4.0, HEAD_DY + 4.0, BAY_TOP - SKIRT_H, BAY_TOP)
+    # ｻｰﾎﾞの底(上向き)と当たる所はｽｶｰﾄを切り欠く
+    bx = c.servo_body_x()
+    skirt -= box(bx - c.SV_L / 2 - 1.0, bx + c.SV_L / 2 + 1.0, -c.SV_W / 2 - 1.0, c.SV_W / 2 + 1.0, BAY_TOP - SKIRT_H - 1, BAY_TOP + 0.01)
+    # 首: 頭と同じ太さでまっすぐ立てた角筒
+    neck = outline().extrude(SHELF_BOT - BAY_TOP).translate((0, 0, BAY_TOP))
+    # 中は漏斗形にくり抜く(棚がｻﾎﾟｰﾄなしで刷れるよう、上へ 45°前後ですぼめてｹｰﾌﾞﾙ穴へつなぐ)
+    neck -= _loft(outline(WALL), BAY_TOP - 0.01, _rr(6.0, 4.0, 2.0, -8.0, STACK_Y0 + 5.0), SHELF_TOP + 0.5)
     # 頭の受け(棚 + 背面の壁 + 側壁はﾍﾞｰｽ部分だけ + 前のﾘｯﾌﾟ)
+    shelf_sec = outline()
     shelf = shelf_sec.extrude(SHELF_T).translate((0, 0, SHELF_BOT))
-    shelf -= box(-14.0, -2.0, STACK_Y0 + 1.0, STACK_Y0 + 9.0, SHELF_BOT - 1, SHELF_TOP + 1)   # ｹｰﾌﾞﾙ穴(ﾍﾞｰｽの配線口側)
+    shelf -= box(-14.0, -2.0, STACK_Y0 + 1.0, STACK_Y0 + 9.0, SHELF_BOT - 1, SHELF_TOP + 1)   # ｹｰﾌﾞﾙ穴
     grip = box(-b.OUT_X + b.BODY_R, b.OUT_X - b.BODY_R, HEAD_DY - b.OUT_Y, STACK_Y0 - b.CLR, SHELF_TOP - 0.01, SHELF_TOP + GRIP_H)
     for sx in (1, -1):
         x_in, x_out = sx * b.IN_X, sx * b.OUT_X
@@ -112,11 +106,8 @@ def neck_part() -> Manifold:
                     SHELF_TOP - 0.01, SHELF_TOP + GRIP_H)
     grip += box(-b.IN_X + 7, b.IN_X - 7, STACK_Y1 + b.CLR, HEAD_DY + b.OUT_Y, SHELF_TOP - 0.01, SHELF_TOP + 2.5)
     grip = grip ^ shelf_sec.extrude(GRIP_H + 1).translate((0, 0, SHELF_TOP - 0.5))
-    part = skirt + lid + neck + shelf + grip
-    part -= hollow
-    part -= _rr(NECK_HX + 2 - NECK_IN, NECK_HY + 2 - NECK_IN, 6).extrude(LID_T + 2).translate((0, 0, BAY_TOP - 1))
-    # ﾎﾞｽの M2 下穴
-    part -= d.cyl_x(0.8, -(BAY_HX + 1), BAY_HX + 1, 0.0, SCREW_Z, 24)
+    part = skirt + neck + shelf + grip
+    part -= d.cyl_x(0.8, -(b.OUT_X + 1), b.OUT_X + 1, HEAD_DY, SCREW_Z, 24)   # M2 下穴
     return part
 
 
