@@ -58,7 +58,8 @@ POCKET_FLOOR = HORN_FACE_Z - 1.5             # ポケットの底(ホーンの�
 # ---------------------------------------------------------------- CoreMatrix + 18350x2 ベース
 CM_W = 54.0
 CM_R = 5.0
-CM_DEPTH = 21.1 + 11.6   # ベース H(.scad の echo) + CoreMatrix 厚み
+CM_BASE_H = 26.7         # 18350x2 ベースの高さ (.scad の echo。スタックチャン仕様 = 電池部 21.7 + 配線ギャラリー 5)
+CM_DEPTH = CM_BASE_H + 11.6   # + CoreMatrix 厚み (背面プレートを外すと 1mm ほど薄いが、前の縁で押さえる)
 CM_CLR = 0.3
 CR_FLOOR_T = 2.4
 CR_WALL = 2.0
@@ -68,7 +69,7 @@ CM_Y1 = CM_Y0 + CM_DEPTH                     # スタックの前面(LED)
 CR_SIDE_H = 14.0
 CR_BACK_H = 22.0
 CR_LIP_H = 2.5
-CR_SIDE_Y1 = CM_Y0 + 21.1 - 1.0              # 側壁はベース部分だけ(CoreMatrix 側面の USB-C・Grove・ボタンを塞がない)
+CR_SIDE_Y1 = CM_Y0 + CM_BASE_H - 1.0         # 側壁はベース部分だけ(CoreMatrix 側面の USB-C・Grove・ボタンを塞がない)
 CR_TENONS = [(-20.0, 26.0), (20.0, 26.0)]    # 受け台を天板に留めるスナップほぞ(天板の下で返しが掛かる)
 CR_TENON_T = 4.0                              # ほぞの厚み(Y)
 
