@@ -72,6 +72,8 @@ CR_LIP_H = 2.5
 CR_SIDE_Y1 = CM_Y0 + CM_BASE_H - 10.0        # 側壁はベースの後ろ寄りだけ(v2: ベース上端の配線口と CoreMatrix 側面のポートを空ける)
 CR_TENONS = [(-20.0, 26.0), (20.0, 26.0)]    # 受け台を天板に留めるスナップほぞ(天板の下で返しが掛かる)
 CR_TENON_T = 4.0                              # ほぞの厚み(Y)
+RIB_INTERF = 0.2     # v3: つぶしﾘﾌﾞの食い込み(左右・前後それぞれの合計)。ｶﾞﾀつくなら 0.3、入らなければ 0.1
+RIB_R = 1.0          # ﾘﾌﾞの丸みの半径
 
 
 def servo_body_x() -> float:
@@ -203,6 +205,8 @@ def cm_cradle_part() -> Manifold:
     stack_space = d._along_y(section, CM_Y0 - CM_CLR, CM_Y1 + CM_CLR)
     fillet = box(-CM_W / 2 - CM_CLR, CM_W / 2 + CM_CLR, CM_Y0 - CM_CLR, CM_Y1 + CM_CLR, fz - 0.01, fz + CM_R)
     cradle += fillet - stack_space
+    # v3: つぶしﾘﾌﾞ。すきま(配線の逃げ)は残したまま、細い縦ﾘﾌﾞだけでｽﾀｯｸを挟んでｶﾞﾀを止める
+    cradle += _crush_ribs(fz)
     # 背板の配線穴(サーボのケーブルを前へ回す場合)と、側壁の指掛け
     cradle -= box(-30.0, -18.0, y_back - 1, CR_BACK_Y + CR_WALL + 1, fz + 3.0, fz + 9.0)
     # v2: 床を横切る配線溝(ベース上端の配線口が下向きでも線が挟まらない。下は天板なので貫通でよい)
@@ -212,6 +216,30 @@ def cm_cradle_part() -> Manifold:
         tenon = d._snap_tenon(d.TENON_W, PLATE_T + 0.15, 4.5).mirror((0, 1)).translate((x, z0 + 0.01))
         cradle += d._along_y(tenon, y - CR_TENON_T / 2, y + CR_TENON_T / 2)
     return cradle
+
+
+def _rib(px: float, py: float, nx: float, ny: float, z0: float, z1: float, protrude: float) -> Manifold:
+    """壁の内面 (px, py) に立つ縦ﾘﾌﾞ。(nx, ny) は内向きの法線。上端 3 mm は先細り(差し込みのガイド)。"""
+    cx, cy = px + nx * (protrude - RIB_R), py + ny * (protrude - RIB_R)
+    body = Manifold.cylinder(z1 - 3.0 - z0, RIB_R, RIB_R, 24).translate((cx, cy, z0))
+    tip = Manifold.cylinder(3.0, RIB_R, max(RIB_R - protrude, 0.05), 24).translate((cx, cy, z1 - 3.0))
+    # 壁の中に埋まる側だけ残す必要はない(壁と結合する)ので、そのまま返す
+    return body + tip
+
+
+def _crush_ribs(fz: float) -> Manifold:
+    gap = CM_CLR * 2                      # 左右(前後)のすきまの合計
+    p = (gap + RIB_INTERF) / 2            # 左右のﾘﾌﾞはそれぞれ半分ずつ受け持つ
+    ribs = Manifold()
+    x_face = CM_W / 2 + CM_CLR
+    y_back_face = CR_BACK_Y + CR_WALL
+    for sx in (1, -1):                    # 側壁に 2 本ずつ
+        for y in (CM_Y0 + 4.0, CR_SIDE_Y1 - 4.0):
+            ribs += _rib(sx * x_face, y, -sx, 0, fz + CM_R, fz + CR_SIDE_H, p)
+    pb = gap + RIB_INTERF                 # 背板のﾘﾌﾞで前へ押し、前のﾘｯﾌﾟで受ける
+    for x in (-14.0, 0.0, 14.0):
+        ribs += _rib(x, y_back_face, 0, 1, fz + CM_R, fz + CR_BACK_H, pb)
+    return ribs
 
 
 # ---------------------------------------------------------------- 表示・干渉確認用(印刷しない)
