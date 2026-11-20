@@ -91,6 +91,7 @@
 //   ・歩いている間はキャラもその場で脚を動かして歩く (前進は右向き、後退は左向き)
 //   ・本体の傾き・揺れはそのまま効く: 段差でガタッとすると跳ねる、持ち上げて振ると目が回る、
 //     その場で速く回ると目が回る、止まって静かにしていると寝る (寝息)、また歩き出すと起きてびっくり
+//   v0.13.1: STUDIO で箱庭のキャラを保存し直したら、歩行中のキャラもそのキャラに替わる (以前は再起動まで前のまま)
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -113,7 +114,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.0";
+static const char* FW_VER = "0.13.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -1068,6 +1069,7 @@ static bool usbPower() { int16_t v = M5.Power.getVBUSVoltage(); return v > 4000;
 /// 保存してあるキャラ (hako.hxc) を読む。無い・壊れていれば組み込みのキャラ
 static void hakoLoadChar() {
   hcOk = false;
+  wchReady = false;                      // v0.13.1: 歩行中のキャラも次に出す時に読み直す (STUDIO で保存し直した時)
   if (!FSYS || !FSYS->exists(HAKO_CHAR)) return;
   File f = FSYS->open(HAKO_CHAR, FILE_READ);
   uint8_t b[HXC_FILE_SIZE];
