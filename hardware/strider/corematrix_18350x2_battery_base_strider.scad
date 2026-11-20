@@ -147,6 +147,8 @@ key_z = 6.5; // [3:0.1:15]
 /* [刻印] */
 // 刻印する
 engrave = true;
+// 底面の文字とﾏｰｸ(HEXA STAGE / 18350 x2 / ABC矢印)
+engrave_bottom = false;
 // 刻印深さ
 engr_d = 0.4; // [0.2:0.05:1]
 
@@ -314,7 +316,7 @@ module strider_exits() {
 module engravings() {
     // 底面刻印 (鏡像で底から読める向き)
     // 文字の「上」はｷｰﾁｪｰﾝ側に向ける → 吊るした状態で正立して読める
-    translate([0,0,-eps]) linear_extrude(engr_d + eps) mirror([1,0,0]) {
+    if (engrave_bottom) translate([0,0,-eps]) linear_extrude(engr_d + eps) mirror([1,0,0]) {
         rotate([0,0, keyring ? (key_side < 0 ? -90 : 90) : 0]) {
             translate([0,  2.5]) text("HEXA STAGE", size=3.6, halign="center", valign="center",
                                       font="Liberation Sans:style=Bold");
