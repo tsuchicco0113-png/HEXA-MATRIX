@@ -82,6 +82,9 @@
 //     servo=GPIO (M5-Bus の 23 など。-1 で使わない) / strim=中立の補正µs / sinv=前後を入れ替え / wmax=速さの上限%
 //   ・ジャイロで向きを数える (重力のまわりの回転なので本体をどう立てても良い)。PING の "walk":{"yaw":度,"wz":度/秒}
 //     yawzero=1 で 0 に戻す。その場で回る歩かせ方を探す・角度で止めるのに使う
+//
+//   v0.12.1: 歩行の顔を純正スタックチャン (M5Stack-Avatar) 風に。小さな黒目 2 つと横一文字の口、
+//            まばたき・息 (上下)・目線、歩いている間はにっこりして口パク
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -104,7 +107,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.12.0";
+static const char* FW_VER = "0.12.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;

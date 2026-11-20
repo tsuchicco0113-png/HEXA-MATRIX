@@ -87,55 +87,51 @@ struct HxmWalk {
 };
 
 // ---------------------------------------------------------------- 顔 (16x16、各行 MSB が左)
-//   目は 4 行目あたり、口は 11 行目あたり。歩いている間は 0.25 秒ごとに体が上下する (1 行ずらす)
+//   純正スタックチャン (M5Stack-Avatar) の顔を 16x16 に縮めたもの:
+//   小さな黒目 2 つ (2x2、間隔 6 マス) と横一文字の口 (4 マス)。Avatar の比率 (320x240 で目 x=90/230 y=93、口 y=148) に合わせる
+//   ・まばたき (3.2 秒ごと)・息 (上下 1 マス、歩くと速い)・目線 (時々左右に 1 マス)
 enum : uint8_t { HXW_FACE_AUTO = 0, HXW_FACE_NORMAL = 1, HXW_FACE_SMILE = 2, HXW_FACE_WOW = 3, HXW_FACE_SLEEPY = 4, HXW_FACE_ANGRY = 5,
                  HXW_FACE_N = 6 };
 
-static inline void hxw_eye(uint16_t* r, int y, int x, uint8_t kind) {
-  auto px = [&](int yy, int xx) { if (yy >= 0 && yy < 16 && xx >= 0 && xx < 16) r[yy] |= (uint16_t)(0x8000 >> xx); };
-  switch (kind) {
-    case 0:  for (int dy = 0; dy < 3; dy++) for (int dx = 0; dx < 2; dx++) px(y + dy, x + dx); break;   // ふつう (2x3)
-    case 1:  px(y + 2, x - 1); px(y + 1, x); px(y + 1, x + 1); px(y + 2, x + 2); break;                  // にっこり (^)
-    case 2:  for (int dy = 0; dy < 4; dy++) { px(y - 1 + dy, x - 1); px(y - 1 + dy, x + 2); }               // まんまる (□)
-             px(y - 1, x); px(y - 1, x + 1); px(y + 2, x); px(y + 2, x + 1); break;
-    case 3:  px(y + 2, x - 1); px(y + 2, x); px(y + 2, x + 1); px(y + 2, x + 2); break;                  // ねむい (-)
-    case 4:  px(y, x - 1); px(y + 1, x); px(y + 1, x + 1); px(y + 2, x + 1); px(y + 2, x); break;        // おこ (\ /)
-    default: px(y + 2, x); px(y + 2, x + 1); break;                                                       // まばたき
-  }
-}
-
-/// face: 1〜5、dir: 進む向き (-1/0/1)、t: ms。rows に 16 行を書く
+/// face: 1〜5、dir: 進む向き (-1/0/1、0 以外は歩いている)、t: ms。rows に 16 行を書く
 static inline void hxm_walk_face(uint16_t* rows, uint8_t face, int dir, uint32_t t) {
   for (int i = 0; i < 16; i++) rows[i] = 0;
-  bool blink = (t % 3200) < 140 && face != HXW_FACE_SLEEPY;
-  int bob = dir != 0 && ((t / 250) & 1) ? 1 : 0;               // 歩くと上下に揺れる
-  int ey = 4 + bob;
-  uint8_t ek = blink ? 9 : face == HXW_FACE_SMILE ? 1 : face == HXW_FACE_WOW ? 2 : face == HXW_FACE_SLEEPY ? 3
-             : face == HXW_FACE_ANGRY ? 4 : 0;
-  hxw_eye(rows, ey, 4, ek);
-  if (ek == 4) {   // おこ: 右目は鏡
-    uint16_t tmp[16] = {0};
-    hxw_eye(tmp, ey, 4, 4);
-    for (int i = 0; i < 16; i++) {
-      uint16_t v = tmp[i], m = 0;
-      for (int b = 0; b < 16; b++) if (v & (0x8000 >> b)) m |= (uint16_t)(0x8000 >> (15 - b));
-      rows[i] |= m;
+  const bool walking = dir != 0;
+  // 息: 止まっている時は 3 秒でゆっくり、歩くと 1 歩ごと (0.25 秒) に上下
+  int dy = walking ? (int)((t / 250) & 1) : ((t % 3000) < 1500 ? 0 : 1);
+  // 目線: 4.7 秒ごとに 0.6 秒だけ左右どちらかを見る (歩いている間は前を見る)
+  int dx = 0;
+  if (!walking && (t % 4700) < 600) dx = ((t / 4700) & 1) ? 1 : -1;
+  const bool blink = (t % 3200) < 130 && face != HXW_FACE_SLEEPY;
+  auto px = [&](int y, int x) { y += dy; if (y >= 0 && y < 16 && x >= 0 && x < 16) rows[y] |= (uint16_t)(0x8000 >> x); };
+  const int EY = 5, LX = 4, RX = 10, MY = 10;     // 目の上の行 / 左目と右目の左の列 / 口の行
+  // 目
+  for (int e = 0; e < 2; e++) {
+    int x = (e ? RX : LX) + dx;
+    if (blink) { px(EY + 1, x); px(EY + 1, x + 1); continue; }               // まばたき: 横線
+    switch (face) {
+      case HXW_FACE_SMILE:  px(EY + 1, x - 1); px(EY, x); px(EY, x + 1); px(EY + 1, x + 2); break;   // にっこり ^
+      case HXW_FACE_SLEEPY: px(EY + 1, x); px(EY + 1, x + 1); break;                                 // ねむい -
+      case HXW_FACE_WOW:    px(EY - 1, x); px(EY - 1, x + 1); px(EY, x - 1); px(EY, x + 2);           // びっくり: 大きい目
+                            px(EY + 1, x - 1); px(EY + 1, x + 2); px(EY + 2, x); px(EY + 2, x + 1); break;
+      default:              px(EY, x); px(EY, x + 1); px(EY + 1, x); px(EY + 1, x + 1); break;         // ふつう・おこ: 黒目 2x2
     }
-  } else {
-    hxw_eye(rows, ey, 10, ek);
   }
-  int my = 11 + bob;
-  auto px = [&](int yy, int xx) { if (yy >= 0 && yy < 16 && xx >= 0 && xx < 16) rows[yy] |= (uint16_t)(0x8000 >> xx); };
+  if (face == HXW_FACE_ANGRY && !blink) {        // おこ: 眉 (\ /)
+    px(EY - 3, LX - 1); px(EY - 3, LX); px(EY - 2, LX + 1);
+    px(EY - 2, RX); px(EY - 3, RX + 1); px(EY - 3, RX + 2);
+  }
+  // 口 (Avatar と同じ横一文字が基本)
   switch (face) {
-    case HXW_FACE_SMILE:  px(my - 1, 5); px(my, 6); px(my, 7); px(my, 8); px(my, 9); px(my - 1, 10); break;
-    case HXW_FACE_WOW:    px(my - 1, 7); px(my - 1, 8); px(my, 6); px(my, 9); px(my + 1, 7); px(my + 1, 8); break;
-    case HXW_FACE_SLEEPY: px(my, 7); px(my, 8); px(1, 13); px(1, 14); px(2, 14); px(3, 13); px(3, 14); break;   // 口 + z
-    case HXW_FACE_ANGRY:  px(my, 6); px(my - 1, 7); px(my - 1, 8); px(my, 9); break;
-    default:              px(my, 6); px(my, 7); px(my, 8); px(my, 9); break;
-  }
-  if (dir != 0) {   // 進む向きの印 (下の端に ^ か v)
-    if (dir > 0) { px(15, 7); px(15, 8); px(14, 7); px(14, 8); }
-    else { px(14, 7); px(14, 8); px(15, 6); px(15, 9); }
+    case HXW_FACE_SMILE:
+      if (walking && ((t / 250) & 1)) {          // 歩いている間はしゃべるように口が開く
+        for (int x = 6; x <= 9; x++) { px(MY - 1, x); px(MY, x); }   // Avatar の口パクと同じ、塗った四角
+      } else { px(MY - 1, 5); px(MY - 1, 10); for (int x = 6; x <= 9; x++) px(MY, x); }   // 口角が上がる
+      break;
+    case HXW_FACE_WOW:    px(MY - 1, 7); px(MY - 1, 8); px(MY, 6); px(MY, 9); px(MY + 1, 7); px(MY + 1, 8); break;  // o
+    case HXW_FACE_SLEEPY: px(MY, 7); px(MY, 8); break;
+    case HXW_FACE_ANGRY:  px(MY, 5); for (int x = 6; x <= 9; x++) px(MY - 1, x); px(MY, 10); break;   // への字
+    default:              for (int x = 6; x <= 9; x++) px(MY, x); break;
   }
 }
 
