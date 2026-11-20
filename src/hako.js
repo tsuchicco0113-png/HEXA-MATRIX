@@ -55,6 +55,9 @@ function resetSim(){
   hk.w=new HxcWorld();
   if(!sp){ return; }
   hk.w.init(sp,hk.p,hk.seed=(hk.seed*1103515245+12345)>>>0||1);
+  // 描いた位置から始める (作図とプレビューの位置をそろえる。そこから重力で落ちる)
+  let x0=16,y0=16; for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]){ x0=Math.min(x0,x); y0=Math.min(y0,y); }
+  hk.w.x=x0<<8; hk.w.y=y0<<8;
   hk.w.terrain=terRows(); hk.w.fit();   // 地形に埋まっていたら近くへ逃がす
 }
 function input(){
@@ -96,6 +99,17 @@ function drawSim(){
   $("hkInfo").textContent=hk.w.sp.w?("状態: "+HXC.ST_NAME[hk.w.st]+" ・ 床: 画面の"+qn+(hk.phone&&hk.phone.g?" ・ スマホの傾き":" ・ 傾き "+Math.round(((hk.ang%360)+540)%360-180)+"°")):"キャラを描いてください";
 }
 
+// ---- 落ちて止まる所 (エンジンと同じく、キャラの外枠の箱で地形・画面の端に当たる)
+function landing(){
+  let x0=16,y0=16,x1=-1,y1=-1;
+  for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]){ x0=Math.min(x0,x); y0=Math.min(y0,y); x1=Math.max(x1,x); y1=Math.max(y1,y); }
+  if(x1<0) return null;
+  const hit=(yy)=>{ if(yy+(y1-y0)>15) return true; for(let y=yy;y<=yy+(y1-y0);y++) for(let x=x0;x<=x1;x++) if(hk.ter[y*16+x]) return true; return false; };
+  if(hit(y0)) return {dy:0,x0,y0,x1,y1};             // いま地形に重なっている (エンジンは近くへ逃がす)
+  let dy=0; while(!hit(y0+dy+1)) dy++;
+  return {dy,x0,y0,x1,y1};
+}
+
 // ---- 絵を描く
 function drawEd(){
   const cv=$("hkEd"), g=cv.getContext("2d"), S=cv.width, p=S/16;
@@ -107,15 +121,18 @@ function drawEd(){
     outer: for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]){ oy=y; break outer; }
     ox=16; for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]) ox=Math.min(ox,x);
   }
+  // 落ちて立つ位置 (うすい点)。プレビューではここに立つ
+  const L=hk.mode==="c"?landing():null, ghost=new Uint8Array(256);
+  if(L&&L.dy>0) for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]&&y+L.dy<16) ghost[(y+L.dy)*16+x]=1;
   for(let y=0;y<16;y++) for(let x=0;x<16;x++){
     const c=hk.cells[y*16+x], t=hk.ter[y*16+x], cx=(x+.5)*p, cy=(y+.5)*p;
     let col="#1b1f26", r=p*0.16;
-    if(hk.mode==="c"){ if(c){ col="#ffffff"; r=p*0.38; } else if(t){ col="#3b4250"; r=p*0.3; } }
+    if(hk.mode==="c"){ if(c){ col="#ffffff"; r=p*0.38; } else if(ghost[y*16+x]){ col="#5a4a2a"; r=p*0.3; } else if(t){ col="#3b4250"; r=p*0.3; } }
     else { if(t){ col="#2fd67b"; r=p*0.38; } else if(c){ col="#4a4f5a"; r=p*0.3; } }
     g.fillStyle=col; g.beginPath(); g.arc(cx,cy,r,0,6.2832); g.fill();
   }
   if(hk.mode==="c") for(const [ex,ey] of eyes){ g.strokeStyle="#ffb02e"; g.lineWidth=2; g.beginPath(); g.arc((ex+ox+.5)*p,(ey+oy+.5)*p,p*0.42,0,6.2832); g.stroke(); }
-  $("hkFound").textContent=sp?("大きさ "+sp.w+"×"+sp.h+" ・ 目 "+eyes.length+" (オレンジの丸) ・ 脚 "+info.legN+(sp.w>14||sp.h>14?" ・ ※大きいので、あまり動けません":"")):"キャラがありません";
+  $("hkFound").textContent=sp?("大きさ "+sp.w+"×"+sp.h+" ・ 目 "+eyes.length+" (オレンジの丸) ・ 脚 "+info.legN+(L&&L.dy>0?" ・ 茶色の点 = 落ちて立つ所 ("+L.dy+"マス下)":"")+(sp.w>14||sp.h>14?" ・ ※大きいので、あまり動けません":"")):"キャラがありません";
 }
 let paint=null;
 function cellAt(e){ const cv=$("hkEd"), r=cv.getBoundingClientRect(); const x=Math.floor((e.clientX-r.left)/r.width*16), y=Math.floor((e.clientY-r.top)/r.height*16); return (x<0||y<0||x>15||y>15)?-1:y*16+x; }
@@ -225,6 +242,9 @@ function wire(){
     if(hk.mode==="c") hk.cells=b; else hk.ter=b; changed(); };
   $("hkUp").onclick=()=>shift(0,-1); $("hkDown").onclick=()=>shift(0,1);
   $("hkLeft").onclick=()=>shift(-1,0); $("hkRight").onclick=()=>shift(1,0);
+  // 床に置く: 落ちて立つ所まで下げる (作図とプレビューの高さをそろえる)
+  $("hkFloor").onclick=()=>{ if(hk.mode!=="c") return; const L=landing(); if(!L||!L.dy) return;
+    const b=new Uint8Array(256); for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(hk.cells[y*16+x]) b[(y+L.dy)*16+x]=1; hk.cells=b; changed(); };
   // 編集画面の上にマウスがある時は方向キーでも動かす
   let edHover=false; $("hkEd").addEventListener("pointerenter",()=>edHover=true); $("hkEd").addEventListener("pointerleave",()=>edHover=false);
   document.addEventListener("keydown",e=>{ if(!edHover||e.ctrlKey||e.metaKey||e.altKey) return;
