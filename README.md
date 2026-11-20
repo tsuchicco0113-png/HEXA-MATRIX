@@ -342,3 +342,8 @@ CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩
 - PING: `"walk":{"walker","pin","trim","inv","max","spd","us","show","face","cmds","tmo","yaw","wz"}`
 - ハブ: `POST /api/walk {"speed":40,"face":2}` (1.5 秒ごとに頼み直す) / `POST /api/walk/stop`
 - PC でのテスト: `g++ -std=c++17 tests/walk_test.cpp && ./a.out`、`python3 tests/fakecm.py --fw 0.12.0`
+
+## ライセンス
+
+MIT License (`LICENSE`、Copyright (c) 2026 HEXA STAGE)。フォント (東雲フォント・美咲ゴシック) はそれぞれのライセンスのままです。
+歩行モードは [Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースに合わせて作りましたが、そのコードは含みません。
