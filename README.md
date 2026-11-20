@@ -307,6 +307,11 @@ Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 ### ファーム v0.9.3 — Wi-Fi の転送失敗・点滅の本当の原因
 - loop() で時刻 `now` を Wi-Fi の受け取り (netTick) より前に取っていたため、Wi-Fi で受けた直後に `now - 受けた時刻` が負 (符号なしで巨大) になり、受け取りを時間切れとして捨てる / 1コマ送りを「止んだ」として消灯する、をしていた。USB は先に読むので起きなかった。netTick の後で now を取り直し、比較を符号付きに
 
+## 緑の電源 LED (ファーム v0.13.2、ハブ v0.13.1、CPZ アプリ v0.12.1)
+
+CoreMatrix の SD カード横の緑 LED は M5PM1 の LED_EN で点く電源 LED で、電池をつなぐと電源 OFF 中も点きっぱなしになります(赤は充電 IC の CHG_STAT で、充電中だけ点きます)。
+CPZ の設定「緑の電源LED」か `CONFIG pled=0` で消せます。M5Unified が起動のたびに点けるので、ファームが起動後に毎回設定どおりに戻します。
+
 ## 歩行モード: Stackchan Strider (ファーム v0.12、CPZ アプリ v0.11、ハブ v0.12)
 
 [Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースを、

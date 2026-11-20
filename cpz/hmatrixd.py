@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.13.0"
+VERSION = "0.13.1"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -838,6 +838,7 @@ class Hub:
     CFG_KEYS = ("autorot", "shake", "psave", "rotreset", "rotlearn")
     # v0.12 歩行: servo は GPIO 番号 (-1 で使わない)、strim は µs、wmax は %、ほかは true/false
     WALK_KEYS = ("walker", "servo", "strim", "sinv", "wmax", "yawzero", "strimtest", "wchar")
+    PLED_KEYS = ("pled",)          # v0.13.2: 緑の電源 LED
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
@@ -848,6 +849,8 @@ class Hub:
             raise RuntimeError("本体のファームを v0.10.0 以上にしてください (箱庭)")
         if any(k in opt for k in self.WALK_KEYS) and not self.link.fw_at_least(0, 12, 0):
             raise RuntimeError("本体のファームを v0.12.0 以上にしてください (歩行)")
+        if any(k in opt for k in self.PLED_KEYS) and not self.link.fw_at_least(0, 13, 2):
+            raise RuntimeError("本体のファームを v0.13.2 以上にしてください (電源 LED)")
         def val(k, v):
             if k == "hako":
                 return v if v in ("auto", "on", "off") else ("on" if v is True else "off" if v is False else "auto")
@@ -856,7 +859,7 @@ class Hub:
             if isinstance(v, (int, float)):
                 return str(int(v))
             raise ValueError(f"{k} の値が変です")
-        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS if k in opt]
+        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS if k in opt]
         if not items:
             raise ValueError("設定がありません")
         return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)

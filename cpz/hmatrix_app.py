@@ -37,7 +37,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.12.0"
+VERSION = "0.12.1"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -382,7 +382,7 @@ class App:
         self.toast_draw(img)
         return img
 
-    SET_KEYS = ["bright", "rot", "autorot", "shake", "psave", "hako", "chg", "hflip", "ap", "teach", "stop"]
+    SET_KEYS = ["bright", "rot", "autorot", "shake", "psave", "hako", "chg", "hflip", "pled", "ap", "teach", "stop"]
     SET_ROWS = len(SET_KEYS)
 
     def set_items(self):
@@ -406,6 +406,7 @@ class App:
                 "hako": ("箱庭", hset + (" ・いま箱庭" if dv.get("mode") == "hako" else "") if newh else "要v0.10"),
                 "chg": ("充電の速さ", (f"{hk.get('chg', 180)}mA" + (" (18350×2 用)" if hk.get("chg") == 650 else "")) if newh else "要v0.10"),
                 "hflip": ("箱庭の傾き 左右", ("反対" if hk.get("hflip") else "ふつう") if newh else "要v0.10"),
+                "pled": ("緑の電源LED", ("点ける" if hk.get("pled", 1) else "消す") if "pled" in hk else "要v0.13.2"),
                 "ap": ("イベントAP (CPZ)", "?" if not ap else ("入" if ap.get("on") else "切") if ap.get("ok") else "使えません"),
                 "teach": ("APを本体に教える", "USB で ENTER"),
                 "stop": ("CPZから止める", "ENTER")}
@@ -701,6 +702,9 @@ class App:
             cfgcall({"chg": to}, "充電を 650mA にしました (18350×2 ベースの時だけ)" if to == 650 else "充電を 180mA にしました")
         elif key == "hflip" and lr:
             cfgcall({"hflip": not hk.get("hflip")}, "箱庭で傾けた時の左右を入れ替えました")
+        elif key == "pled" and lr:
+            to = not hk.get("pled", 1)
+            cfgcall({"pled": to}, "緑の電源LEDを点けます" if to else "緑の電源LEDを消します (電源OFF中も消えたままか見てください)")
         elif key == "ap" and lr:
             on = not (self.ap or {}).get("on") if val == "ENTER" else val == "RIGHT"
             def done(r):

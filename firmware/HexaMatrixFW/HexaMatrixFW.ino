@@ -92,6 +92,7 @@
 //   ・本体の傾き・揺れはそのまま効く: 段差でガタッとすると跳ねる、持ち上げて振ると目が回る、
 //     その場で速く回ると目が回る、止まって静かにしていると寝る (寝息)、また歩き出すと起きてびっくり
 //   v0.13.1: STUDIO で箱庭のキャラを保存し直したら、歩行中のキャラもそのキャラに替わる (以前は再起動まで前のまま)
+//   v0.13.2: 緑の電源 LED (M5PM1 LED_EN) を消せる設定 pled (CONFIG pled=0)。M5Unified は起動のたびに点けるので起動後に毎回反映
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -114,7 +115,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.1";
+static const char* FW_VER = "0.13.2";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -168,6 +169,8 @@ static int      rotCand = -1; static uint32_t rotCandSince = 0;
 enum : uint8_t { HAKO_AUTO = 0, HAKO_ON = 1, HAKO_OFF = 2 };
 static uint8_t  cfgHako = HAKO_AUTO;    // 自動 (USB なし=箱庭) / いつも箱庭 / 使わない
 static uint16_t cfgChg = 180;           // 充電電流 mA (180 / 650)
+static bool cfgPled = true;             // v0.13.2: 緑の電源 LED (M5PM1 LED_EN)
+static void applyPled() { M5.Power.M5pm1.setLedEnLevel(cfgPled); }
 static int8_t   cfgHflip = 1;           // 傾きの左右 (+1/-1)。キャラが逆に転がるなら hflip=1 で入れ替え
 static bool     cfgImuHigh = true;      // BMI270 INT1 の極性 (true=動いたら High)
 static uint16_t cfgPeek = 3;            // 本体が眠っている間、何秒ごとに見回るか
@@ -336,12 +339,12 @@ static void sendStatus() {
   // v0.10: 箱庭
   out->printf("\"mode\":\"%s\",\"vbus\":%d,\"hako\":{\"set\":\"%s\",\"st\":%d,\"q\":%d,\"chg\":%u,\"hflip\":%d,"
               "\"imuhi\":%d,\"peek\":%u,\"deep\":%u,\"anymg\":%u,\"plog\":%d,\"peeks\":%lu,\"sleeps\":%lu,"
-              "\"char\":\"%s\",\"try\":%s},",
+              "\"char\":\"%s\",\"try\":%s,\"pled\":%d},",
               hakoOn ? "hako" : "home", (int)M5.Power.getVBUSVoltage(),
               cfgHako == HAKO_ON ? "on" : cfgHako == HAKO_OFF ? "off" : "auto", hakoOn ? (int)hako.st : -1, (int)hako.q,
               cfgChg, cfgHflip < 0 ? 1 : 0, cfgImuHigh ? 1 : 0, cfgPeek, cfgDeep, cfgAnyMg, cfgPlog ? 1 : 0,
               (unsigned long)rtcPeeks, (unsigned long)rtcSleeps,
-              hcOk ? hcName : "", hakoPreview ? "true" : "false");
+              hcOk ? hcName : "", hakoPreview ? "true" : "false", cfgPled ? 1 : 0);
   // v0.12: 歩行
   out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f}}\n",
@@ -972,6 +975,7 @@ static void handleConfig() {
         hakoSuppress = false;
         if (hakoOn && (cfgHako == HAKO_ON) != hakoKeepNet) { hakoStop(); }   // Wi-Fi を保つかが変わる時は入り直す (次の1秒で)
       }
+      else if (!strcmp(k, "pled")) { cfgPled = on; prefs.putBool("pld", on); applyPled(); }
       else if (!strcmp(k, "chg")) { cfgChg = atoi(v) >= 650 ? 650 : 180; prefs.putUShort("chg", cfgChg); M5.Power.setChargeCurrent(cfgChg); }
       else if (!strcmp(k, "hflip")) { cfgHflip = on ? -1 : 1; prefs.putChar("hfl", cfgHflip); }
       else if (!strcmp(k, "imuhi")) { cfgImuHigh = on; prefs.putBool("ihi", on); }
@@ -1320,6 +1324,8 @@ void setup() {
   cfgPlog    = prefs.getBool("plg", false);
   loadWalkCfg();                         // v0.12
   M5.Power.setChargeCurrent(cfgChg);
+  cfgPled    = prefs.getBool("pld", true);
+  applyPled();                           // v0.13.2: M5.begin() が点けた緑 LED を設定どおりに
   // 眠りから起きた / 電池で起動した → 箱庭から (Wi-Fi をつながずに)
   bool wantHako = !cfgWalker && (cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower()));   // v0.12: 歩くロボットは箱庭に入らない
   M5.BtnA.setHoldThresh(800); M5.BtnB.setHoldThresh(800); M5.BtnC.setHoldThresh(800);

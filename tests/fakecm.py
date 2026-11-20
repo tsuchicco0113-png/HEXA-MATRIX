@@ -36,6 +36,7 @@ WALK = {"walker": 0, "wchar": 0, "pin": -1, "trim": 0, "inv": 0, "max": 60, "spd
 WALK_T = [0.0]
 Q = []; stats_q = {"max": 0, "data": 0}       # 遅らせて返す返事 (送る時刻, 中身)
 def fwv(): return tuple(int(x) for x in FW.split("."))
+if fwv() >= (0, 13, 2): HAKO["pled"] = 1
 def out(j):
     if DELAY: time.sleep(DELAY)
     b = (json.dumps(j) + "\n").encode()
@@ -84,6 +85,7 @@ def handle(t, p):
             elif k == "chg" and fwv() >= (0, 10, 0): HAKO["chg"] = 650 if int(v) >= 650 else 180
             elif k in ("hflip", "imuhi", "plog") and fwv() >= (0, 10, 0): HAKO[k] = 1 if v[:1] in "1ot" else 0
             elif k in ("peek", "deep", "anymg") and fwv() >= (0, 10, 0): HAKO[k] = int(v)
+            elif k == "pled" and fwv() >= (0, 13, 2): HAKO["pled"] = 1 if v[:1] in "1ot" else 0
             elif k == "hakoreset": pass
             elif k == "hakoev" and fwv() >= (0, 11, 1):
                 open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} HAKOEV {v}\n"); return out({"ok": True, "hakoev": "try" in HAKO})
