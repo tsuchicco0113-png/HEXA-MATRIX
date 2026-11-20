@@ -309,7 +309,7 @@ Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 ## 歩行モード: Stackchan Strider (ファーム v0.12、CPZ アプリ v0.11、ハブ v0.12)
 
 [Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースを、
-CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩かせます (改造部品は `cm_variant.py` の horn_hub / cm_yoke / cm_cradle)。
+CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩かせます (改造部品は `hardware/strider/` の horn_hub / cm_yoke / cm_cradle)。
 
 ### つなぎ方
 
@@ -346,4 +346,5 @@ CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩
 ## ライセンス
 
 MIT License (`LICENSE`、Copyright (c) 2026 HEXA STAGE)。フォント (東雲フォント・美咲ゴシック) はそれぞれのライセンスのままです。
-歩行モードは [Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースに合わせて作りましたが、そのコードは含みません。
+歩行モードのファーム・アプリは [Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースに合わせて作ったもので、そのコードは含みません。
+`hardware/strider/` の改造部品は Strider の派生物なので、原作の MIT ライセンス (`hardware/strider/LICENSE-stackchan-strider`) に従います。
