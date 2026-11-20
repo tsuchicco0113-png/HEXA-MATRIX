@@ -60,7 +60,7 @@ CM_W = 54.0
 CM_R = 5.0
 CM_BASE_H = 26.7         # 18350x2 ベースの高さ (.scad の echo。スタックチャン仕様 = 電池部 21.7 + 配線ギャラリー 5)
 CM_DEPTH = CM_BASE_H + 11.6   # + CoreMatrix 厚み (背面プレートを外すと 1mm ほど薄いが、前の縁で押さえる)
-CM_CLR = 0.3
+CM_CLR = 0.5         # v2: 0.3 → 0.5(試作でｷﾂかった)
 CR_FLOOR_T = 2.4
 CR_WALL = 2.0
 CR_BACK_Y = SV_W / 2 + SV_CLR + 1.0          # 受け台の背板の背面(サーボの前)
@@ -69,7 +69,7 @@ CM_Y1 = CM_Y0 + CM_DEPTH                     # スタックの前面(LED)
 CR_SIDE_H = 14.0
 CR_BACK_H = 22.0
 CR_LIP_H = 2.5
-CR_SIDE_Y1 = CM_Y0 + CM_BASE_H - 1.0         # 側壁はベース部分だけ(CoreMatrix 側面の USB-C・Grove・ボタンを塞がない)
+CR_SIDE_Y1 = CM_Y0 + CM_BASE_H - 10.0        # 側壁はベースの後ろ寄りだけ(v2: ベース上端の配線口と CoreMatrix 側面のポートを空ける)
 CR_TENONS = [(-20.0, 26.0), (20.0, 26.0)]    # 受け台を天板に留めるスナップほぞ(天板の下で返しが掛かる)
 CR_TENON_T = 4.0                              # ほぞの厚み(Y)
 
@@ -205,6 +205,8 @@ def cm_cradle_part() -> Manifold:
     cradle += fillet - stack_space
     # 背板の配線穴(サーボのケーブルを前へ回す場合)と、側壁の指掛け
     cradle -= box(-30.0, -18.0, y_back - 1, CR_BACK_Y + CR_WALL + 1, fz + 3.0, fz + 9.0)
+    # v2: 床を横切る配線溝(ベース上端の配線口が下向きでも線が挟まらない。下は天板なので貫通でよい)
+    cradle -= box(-x_out - 1, x_out + 1, CM_Y0 + CM_BASE_H - 8.0, CM_Y0 + CM_BASE_H + 1.0, z0 - 1, fz + 0.01)
     # 床下のスナップほぞ(下向き)。断面は X-Z 面にあり、造形時(背板が下)はベッドと平行になる
     for x, y in CR_TENONS:
         tenon = d._snap_tenon(d.TENON_W, PLATE_T + 0.15, 4.5).mirror((0, 1)).translate((x, z0 + 0.01))
