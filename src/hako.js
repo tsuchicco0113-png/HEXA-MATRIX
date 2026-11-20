@@ -219,6 +219,16 @@ function wire(){
   $("hkBuiltin").onclick=()=>{ hk.cells=builtinCells(); changed(); };
   $("hkFromMark").onclick=()=>{ if(typeof grid==="undefined") return; hk.cells=Uint8Array.from(grid); changed(); status("「マークを作る」の絵を使いました","ok"); };
   $("hkFlip").onclick=()=>{ const a=hk.mode==="c"?hk.cells:hk.ter, b=new Uint8Array(256); for(let y=0;y<16;y++) for(let x=0;x<16;x++) b[y*16+x]=a[y*16+15-x]; if(hk.mode==="c") hk.cells=b; else hk.ter=b; changed(); };
+  // 全体を1マス動かす (はみ出した点は反対側へ回る。キャラ / 地形のいま描いている方)
+  const shift=(dx,dy)=>{ const a=hk.mode==="c"?hk.cells:hk.ter, b=new Uint8Array(256);
+    for(let y=0;y<16;y++) for(let x=0;x<16;x++) if(a[y*16+x]) b[((y+dy+16)%16)*16+((x+dx+16)%16)]=1;
+    if(hk.mode==="c") hk.cells=b; else hk.ter=b; changed(); };
+  $("hkUp").onclick=()=>shift(0,-1); $("hkDown").onclick=()=>shift(0,1);
+  $("hkLeft").onclick=()=>shift(-1,0); $("hkRight").onclick=()=>shift(1,0);
+  // 編集画面の上にマウスがある時は方向キーでも動かす
+  let edHover=false; $("hkEd").addEventListener("pointerenter",()=>edHover=true); $("hkEd").addEventListener("pointerleave",()=>edHover=false);
+  document.addEventListener("keydown",e=>{ if(!edHover||e.ctrlKey||e.metaKey||e.altKey) return;
+    const m={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0]}[e.key]; if(!m) return; e.preventDefault(); shift(m[0],m[1]); });
   $("hkClear").onclick=()=>{ if(!confirm(hk.mode==="c"?"キャラの絵を消します。よろしいですか？":"地形を消します。よろしいですか？")) return; if(hk.mode==="c") hk.cells=new Uint8Array(256); else hk.ter=new Uint8Array(256); changed(); };
   $("hkDefault").onclick=()=>{ hk.p=Object.assign({},HXC_DEFAULT); buildParams(); changed(true); };
   $("hkName").value=hk.name; $("hkName").oninput=e=>{ hk.name=e.target.value.replace(/[^\x20-\x7e]/g,"").slice(0,16); save(); };
