@@ -1,4 +1,4 @@
-// HEXA MATRIX ファーム v0.11.0 — CoreMatrix を「番組を自分で流す表示機」にする
+// HEXA MATRIX ファーム v0.12.0 — CoreMatrix を「番組を自分で流す表示機」にする
 //
 //   ボード      : M5CoreMatrix (M5Stack ボードマネージャ 3.3.10-a 以上)
 //   ライブラリ  : M5Unified / M5GFX
@@ -74,6 +74,14 @@
 //   ・"hako.hxc" で保存 → 箱庭のキャラになる (無ければ組み込みのキャラ)。返事 {"ok":true,"saved":"hako.hxc","char":名前}
 //   ・"@char" はメモリだけ (試す): その場で「試しの箱庭」に入る (Wi-Fi・USB はつながったまま、眠らない)。
 //     PLAY 0xFE / 0xFF・A+C 長押しで抜ける。試しのキャラは眠りの後に残さない。返事 {"ok":true,"char":名前,"try":true}
+//
+//   v0.12.0: 歩行モード (Stackchan Strider × FEETECH FS90R、hxm_walk.h)
+//   ・WALK (0x08) で連続回転サーボを回して歩く。0.5 秒 (指定可) 次が来なければ止まる。本体のボタンを押しても止まる
+//   ・歩いている間は顔を出す (おまかせ: 歩くとにっこり・上下に揺れる、止まって 20 秒でねむい)
+//   ・CONFIG walker=1 で「歩くロボット」: 電池でも箱庭に入らず Wi-Fi を保ち、Grove の 5V (サーボの電源) を入れる
+//     servo=GPIO (M5-Bus の 23 など。-1 で使わない) / strim=中立の補正µs / sinv=前後を入れ替え / wmax=速さの上限%
+//   ・ジャイロで向きを数える (重力のまわりの回転なので本体をどう立てても良い)。PING の "walk":{"yaw":度,"wz":度/秒}
+//     yawzero=1 で 0 に戻す。その場で回る歩かせ方を探す・角度で止めるのに使う
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -84,6 +92,7 @@
 #include "hxm_wifi.h"
 #include "hxm_orient.h"
 #include "hxm_char.h"
+#include "hxm_walk.h"
 #include <esp_sleep.h>
 #include <esp_idf_version.h>
 #include <soc/soc_caps.h>
@@ -95,7 +104,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.11.2";
+static const char* FW_VER = "0.12.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -111,8 +120,21 @@ static const int SD_SCK = 25, SD_MISO = 26, SD_MOSI = 27, SD_CS = 28;
 // M5IOE1 のピン番号 (M5IOE1_Class の gpio1=0 … gpio10=9 と同じ並び)
 static const uint8_t IOE_TF_EN = 0;    // IO1  PYB_TF_EN      カードの電源
 static const uint8_t IOE_TF_DET = 9;   // IO10 PYB_TFCARD_DET カードの有無
+static const uint8_t IOE_GROVE_EN = 4; // IO5  PYB_GROVE_EN   Grove の 5V (歩行モードのサーボの電源)
 
 static HxmParser usbParser, netParser;
+// v0.12 歩行
+static HxmWalkCfg wcfg;
+static HxmWalk    walk;
+static bool       cfgWalker = false;   // 歩くロボットとして使う (箱庭に入らない・Grove 5V を入れる)
+static bool       walkShow = false;    // 歩行の顔を出している
+static int8_t     servoPinOn = -1;     // いまパルスを出すのにつないでいる GPIO
+static uint16_t   servoUs = 0;         // いま出しているパルス (0 = 出していない)
+static uint32_t   walkIdleAt = 0;      // 止まった時刻 (ねむい顔)
+static float      yawDeg = 0.f, yawRate = 0.f;
+static uint32_t   yawAt = 0;
+static const uint8_t SERVO_BITS = 14;
+static void walkStop(bool hide);
 static HxmParser* pk = &usbParser;     // いま処理しているパケット (USB か Wi-Fi か)
 static Print*     out = &Serial;       // 返事を返す先 (パケットが来た側)
 
@@ -298,12 +320,17 @@ static void sendStatus() {
   // v0.10: 箱庭
   out->printf("\"mode\":\"%s\",\"vbus\":%d,\"hako\":{\"set\":\"%s\",\"st\":%d,\"q\":%d,\"chg\":%u,\"hflip\":%d,"
               "\"imuhi\":%d,\"peek\":%u,\"deep\":%u,\"anymg\":%u,\"plog\":%d,\"peeks\":%lu,\"sleeps\":%lu,"
-              "\"char\":\"%s\",\"try\":%s}}\n",
+              "\"char\":\"%s\",\"try\":%s},",
               hakoOn ? "hako" : "home", (int)M5.Power.getVBUSVoltage(),
               cfgHako == HAKO_ON ? "on" : cfgHako == HAKO_OFF ? "off" : "auto", hakoOn ? (int)hako.st : -1, (int)hako.q,
               cfgChg, cfgHflip < 0 ? 1 : 0, cfgImuHigh ? 1 : 0, cfgPeek, cfgDeep, cfgAnyMg, cfgPlog ? 1 : 0,
               (unsigned long)rtcPeeks, (unsigned long)rtcSleeps,
               hcOk ? hcName : "", hakoPreview ? "true" : "false");
+  // v0.12: 歩行
+  out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
+              "\"show\":%d,\"face\":%u,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f}}\n",
+              cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
+              walkShow ? 1 : 0, walk.face, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -435,6 +462,7 @@ static void failUpload(const char* e) {
 /// 何も流さない状態 (消灯) にする。番組・ライブ・一時再生をすべて止める
 static void goIdle() {
   paused = true; live = false; clipMode = false;
+  walkStop(true);
   if (pf) pf.close();
   pfCount = pfIdx = 0;
   memset(frame, 0, sizeof frame);
@@ -726,6 +754,87 @@ static void bench() {
   if (pf) { pf.seek(8); pfIdx = 0; nextAt = millis(); }
 }
 
+// ---------------------------------------------------------------- 歩行 (v0.12)
+/// サーボのパルスを出す (us=0 で止める)。GPIO が変わったらつなぎ直す
+static void servoWrite(uint16_t us) {
+  if (wcfg.pin < 0) us = 0;
+  if (servoPinOn >= 0 && servoPinOn != wcfg.pin) { ledcDetach(servoPinOn); servoPinOn = -1; }
+  if (us && servoPinOn < 0) {
+    if (!ledcAttach(wcfg.pin, 50, SERVO_BITS)) { servoUs = 0; return; }
+    servoPinOn = wcfg.pin;
+  }
+  if (servoPinOn >= 0) ledcWrite(servoPinOn, us ? hxm_walk_duty(us, SERVO_BITS) : 0);
+  servoUs = us;
+}
+/// Grove の 5V (サーボの電源)。歩くロボットの時だけ入れる
+static void walkPower() {
+  if (M5.getBoard() != m5::board_t::board_M5CoreMatrix) return;
+  ioe1Out(IOE_GROVE_EN, cfgWalker);
+}
+/// 止める。hide=true なら顔も消す (番組・ライブ・消灯へ移る時)
+static void walkStop(bool hide) {
+  if (walk.moving || walk.pulsing) {
+    walk.command(0, 5, 0xFF, millis());
+    walk.pulsing = false;
+  }
+  if (servoUs) servoWrite(0);
+  if (hide) walkShow = false;
+}
+static void walkDraw(uint32_t now) {
+  uint8_t f = walk.face ? walk.face : hxm_walk_autoface(walk.moving, now - walkIdleAt);
+  if (f >= HXW_FACE_N) f = HXW_FACE_NORMAL;
+  int dir = walk.moving ? (walk.spd > 0 ? 1 : -1) : 0;
+  uint16_t rows[16];
+  hxm_walk_face(rows, f, dir, now);
+  uint8_t nf[32];
+  for (int y = 0; y < 16; y++) { nf[y * 2] = rows[y] >> 8; nf[y * 2 + 1] = rows[y] & 0xFF; }
+  if (memcmp(nf, frame, 32)) { memcpy(frame, nf, 32); setOut(MASTER_LV[masterIdx]); drawFrame(); }
+}
+/// WALK (0x08)
+static void handleWalk() {
+  if (pk->len != 3) { sendErr("walk len"); return; }
+  uint32_t now = millis();
+  if (!walkShow) {                                   // 番組・ライブ・一時再生は止めて顔へ
+    stopProgramForExternal();
+    live = false; clipMode = false; needRestore = false; holdUntil = 0;
+    walkShow = true; walkIdleAt = now;
+  }
+  bool was = walk.moving;
+  walk.command((int8_t)pk->buf[0], pk->buf[1], pk->buf[2], now);
+  if (was && !walk.moving) walkIdleAt = now;
+  servoWrite(hxm_walk_us(wcfg, walk.spd));
+  walkDraw(now);
+}
+/// 毎回: 期限切れで止める・中立の後にパルスを止める・顔・ジャイロで向きを数える
+static void walkTick(uint32_t now) {
+  if (walkShow && (live || clipMode || !paused)) walkStop(true);   // 番組・ライブ・一時再生が始まったら顔はやめる
+  if (cfgWalker && imuOk && (int32_t)(now - yawAt) >= 10) {
+    float ax, ay, az, gx, gy, gz;
+    M5.Imu.update();
+    if (M5.Imu.getAccel(&ax, &ay, &az) && M5.Imu.getGyro(&gx, &gy, &gz)) {
+      float dt = yawAt ? (now - yawAt) / 1000.f : 0.f;
+      if (dt > 0.2f) dt = 0.f;
+      yawRate = hxm_yaw_rate(ax, ay, az, gx, gy, gz);
+      if (fabsf(yawRate) > 0.6f) yawDeg += yawRate * dt;        // 止まっている時のゆっくりしたずれは数えない
+      if (yawDeg > 100000.f || yawDeg < -100000.f) yawDeg = 0.f;
+    }
+    yawAt = now;
+  }
+  if (walk.tick(now)) { walkIdleAt = now; servoWrite(hxm_walk_us(wcfg, 0)); }
+  if (!walk.moving && !walk.pulsing && servoUs) servoWrite(0);
+  if (walkShow && (int32_t)(now - holdUntil) >= 0) {
+    static uint32_t lastFace = 0;
+    if ((int32_t)(now - lastFace) >= 40) { lastFace = now; walkDraw(now); }
+  }
+}
+static void loadWalkCfg() {
+  cfgWalker  = prefs.getBool("wkr", false);
+  wcfg.pin   = prefs.getChar("wpin", -1);
+  wcfg.trim  = prefs.getShort("wtrm", 0);
+  wcfg.inv   = prefs.getBool("winv", false);
+  wcfg.maxPct = prefs.getUChar("wmax", 60);
+}
+
 // ---------------------------------------------------------------- 向き・振り (v0.9.6)
 static void saveOrient() {
   char k[4] = "ra0";
@@ -819,6 +928,26 @@ static void handleConfig() {
       else if (!strcmp(k, "deep")) { int n = atoi(v); cfgDeep = (uint16_t)(n < 10 ? 10 : n > 3600 ? 3600 : n); prefs.putUShort("dep", cfgDeep); }
       else if (!strcmp(k, "anymg")) { int n = atoi(v); cfgAnyMg = (uint16_t)(n < 20 ? 20 : n > 500 ? 500 : n); prefs.putUShort("amg", cfgAnyMg); }
       else if (!strcmp(k, "plog")) { cfgPlog = on; prefs.putBool("plg", on); }
+      // v0.12 歩行
+      else if (!strcmp(k, "walker")) {
+        cfgWalker = on; prefs.putBool("wkr", on); walkPower();
+        if (!on) walkStop(true);
+        if (on && hakoOn && !hakoPreview) hakoStop();
+      }
+      else if (!strcmp(k, "servo")) {
+        int n = atoi(v); walkStop(false);
+        wcfg.pin = (int8_t)(n < 0 || n > 30 || n == 0 || n == 1 || n == 12 || n == 13 ? -1 : n);   // I2C と USB のピンは使わせない
+        if (n >= 0 && wcfg.pin < 0) bad = true;
+        prefs.putChar("wpin", wcfg.pin);
+      }
+      else if (!strcmp(k, "strim")) { int n = atoi(v); wcfg.trim = (int16_t)(n < -150 ? -150 : n > 150 ? 150 : n); prefs.putShort("wtrm", wcfg.trim);
+                                       if (servoUs && !walk.moving) servoWrite(hxm_walk_us(wcfg, 0)); }
+      else if (!strcmp(k, "sinv")) { wcfg.inv = on; prefs.putBool("winv", on); }
+      else if (!strcmp(k, "wmax")) { int n = atoi(v); wcfg.maxPct = (uint8_t)(n < 10 ? 10 : n > 100 ? 100 : n); prefs.putUChar("wmax", wcfg.maxPct); }
+      else if (!strcmp(k, "yawzero")) { if (on) yawDeg = 0.f; evOnly = true; }
+      else if (!strcmp(k, "strimtest")) {                           // 中立を確かめる: いまの strim の中立を 2 秒出す
+        if (on && wcfg.pin >= 0) { walk.command(0, 20, 0xFF, millis()); walk.pulsing = true; walk.stopAt = millis() + 1700; servoWrite(hxm_walk_us(wcfg, 0)); }
+      }
       else if (!strcmp(k, "hakoreset")) { if (on) { rtcMagic = 0; if (hakoOn) hakoReset(); } }
       else if (!strcmp(k, "hakoev")) {                              // v0.11.1: STUDIO の 叩く/振る/なでる/つつく (1/2/4/8)・寝かせる (16)
         int n = atoi(v);
@@ -833,7 +962,7 @@ static void handleConfig() {
     p = e ? e + 1 : nullptr;
   }
   if (bad) { sendErr("bad config"); return; }
-  if (evOnly) { out->printf("{\"ok\":true,\"hakoev\":%s}\n", hakoOn ? "true" : "false"); return; }   // 毎回の状態は返さない
+  if (evOnly) { out->printf("{\"ok\":true,\"hakoev\":%s,\"yaw\":%.1f}\n", hakoOn ? "true" : "false", yawDeg); return; }   // 毎回の状態は返さない
   sendStatus();
 }
 
@@ -848,7 +977,7 @@ static bool keyMatch(const uint8_t* p, uint8_t n) {
 static void handlePacket() {
   // v0.9.4: Wi-Fi の相手は、合言葉を通すまで PING と AUTH しか受け付けない (USB は常に通す)
   if (out == &client && !netAuthed && pk->type != HXM_PING && pk->type != HXM_AUTH) {
-    if (pk->type != HXM_FRAME && pk->type != HXM_BRIGHT && pk->type != HXM_FILE_DATA) sendErr("auth");  // 連続で来る物には返さない
+    if (pk->type != HXM_FRAME && pk->type != HXM_BRIGHT && pk->type != HXM_FILE_DATA && pk->type != HXM_WALK) sendErr("auth");  // 連続で来る物には返さない
     return;
   }
   switch (pk->type) {
@@ -859,6 +988,7 @@ static void handlePacket() {
       return;
     case HXM_FRAME:
       if (pk->len != 32) { sendErr("frame len"); return; }
+      walkStop(true);                             // v0.12: 絵が届いたら歩くのはやめる
       memcpy(frame, pk->buf, 32);
       clipMode = false;                           // 1コマずつ届いたらそちらを優先
       stopProgramForExternal();
@@ -873,6 +1003,7 @@ static void handlePacket() {
       if (pk->len == 1) { setRot(pk->buf[0], true); drawFrame(); sendStatus(); }
       return;
     case HXM_CONFIG: handleConfig(); return;
+    case HXM_WALK:  if (!hakoOn) handleWalk(); return;   // 連続で来るので返事はしない
     case HXM_PING:  sendStatus(); return;
     case HXM_BENCH: bench(); return;
     default:
@@ -1084,11 +1215,15 @@ static void hakoPeek() {
 // ---------------------------------------------------------------- ボタン
 static void buttons() {
   if (M5.BtnA.isPressed() || M5.BtnB.isPressed() || M5.BtnC.isPressed()) lastActivity = millis();
+  if (walkShow && (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed())) {   // v0.12: 歩いていたらまず止める
+    bool was = walk.moving; walkStop(false); walkIdleAt = millis();
+    if (was) { flashText("II", 400); return; }
+  }
   if (M5.BtnA.wasClicked()) { live = false; clipMode = false; paused = false; openProgram(cur - 1, true); }
   if (M5.BtnC.wasClicked()) nextProgram();
   if (M5.BtnA.wasHold())    { live = false; clipMode = false; paused = false; openProgram(cur, true); }
   if (M5.BtnB.wasClicked()) {
-    if (live || clipMode || !paused) { goIdle(); flashText("II", 400); }   // 何か出ていれば止めて消灯
+    if (live || clipMode || !paused || walkShow) { goIdle(); flashText("II", 400); }   // 何か出ていれば止めて消灯
     else { paused = false; openProgram(cur, true); }                    // 止まっていれば番組を流す
   }
   if (M5.BtnB.wasHold()) {
@@ -1126,9 +1261,10 @@ void setup() {
   cfgDeep    = prefs.getUShort("dep", 90);
   cfgAnyMg   = prefs.getUShort("amg", 60);
   cfgPlog    = prefs.getBool("plg", false);
+  loadWalkCfg();                         // v0.12
   M5.Power.setChargeCurrent(cfgChg);
   // 眠りから起きた / 電池で起動した → 箱庭から (Wi-Fi をつながずに)
-  bool wantHako = cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower());
+  bool wantHako = !cfgWalker && (cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usbPower()));   // v0.12: 歩くロボットは箱庭に入らない
   M5.BtnA.setHoldThresh(800); M5.BtnB.setHoldThresh(800); M5.BtnC.setHoldThresh(800);
   M5.Display.setColorDepth(8);
   M5.Display.setRotation(rot);
@@ -1144,6 +1280,7 @@ void setup() {
     goIdle();                            // 起動時は流さない (B で再生)
   }
   rtcSleeping = 0;
+  walkPower();                           // v0.12: 歩くロボットならサーボの電源 (Grove 5V)
   sendStatus();
 }
 
@@ -1164,8 +1301,8 @@ void loop() {
     bool usb = usbPower();
     if (lastUsb >= 0 && (int8_t)usb != lastUsb) hakoSuppress = false;   // USB を抜き差ししたら A+C の「抜けた」を解除
     lastUsb = (int8_t)usb;
-    bool want = hakoPreview || cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usb && !hakoSuppress);
-    if (want && !hakoOn && !up.active) hakoStart(true);
+    bool want = hakoPreview || (!cfgWalker && (cfgHako == HAKO_ON || (cfgHako == HAKO_AUTO && !usb && !hakoSuppress)));
+    if (want && !hakoOn && !up.active) { walkStop(true); hakoStart(true); }
     else if (!want && hakoOn) hakoStop();
   }
   if (hakoOn) {
@@ -1208,8 +1345,9 @@ void loop() {
   }
   if (clipMode) clipTick(); else playTick();
   imuTick(now);
+  walkTick(now);                                           // v0.12
   // v0.9.6: 何も出していない (消灯) 状態
-  const bool showing = live || clipMode || !paused || up.active;
+  const bool showing = live || clipMode || !paused || up.active || walkShow;
   // LED ドライバ (TM1680) の状態を時々送り直す。電源の揺れなどで消えても 0.2 秒で戻るように
   // (v0.9.6: 消灯中は真っ暗なので送り直さない)
   static uint32_t lastKeep = 0;

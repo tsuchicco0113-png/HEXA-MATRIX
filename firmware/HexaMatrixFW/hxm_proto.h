@@ -19,6 +19,9 @@
 //                             返事は PING と同じ (cfg / imu / learn / batt / lvl / chg / wnet / ssid2)。だめなら "bad config"
 //                             v0.10 箱庭: hako=auto/on/off  chg=180/650  hflip=0/1  imuhi=0/1  peek=秒  deep=秒
 //                                         anymg=mg  plog=0/1  hakoreset=1。PING に "mode" (home/hako)・"vbus"・"hako":{…}
+//                             v0.12 歩行: walker=0/1  servo=GPIO(-1で使わない)  strim=µs  sinv=0/1  wmax=%  yawzero=1
+//        0x08 WALK    len=3   歩行 (v0.12、hxm_walk.h)。int8 速さ -100〜100% / u8 有効時間 0.1秒単位 / u8 顔 (0xFF=そのまま)
+//                             返事はしない。有効時間内に次が来なければ止まる。PING の "walk":{…} で状態
 //   ---- 単体再生 (v0.3) ----
 //        0x10 FILE_BEGIN len=4+n  u32 全体の大きさ + ファイル名 (英数字 _ - . のみ)
 //        0x11 FILE_DATA  len=2+n  u16 通し番号 + 中身 (n は 200 まで)
@@ -38,7 +41,7 @@
 #pragma once
 #include <stdint.h>
 
-enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06, HXM_CONFIG = 0x07,
+enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06, HXM_CONFIG = 0x07, HXM_WALK = 0x08,
                  HXM_FILE_BEGIN = 0x10, HXM_FILE_DATA = 0x11, HXM_FILE_END = 0x12,
                  HXM_LIST = 0x13, HXM_DELETE = 0x14, HXM_PLAY = 0x15 };
 static const uint8_t HXM_MAX_PAYLOAD = 240;

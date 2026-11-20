@@ -31,6 +31,9 @@ FW = arg("--fw", "0.10.0"); WIN = int(arg("--win", "16")); RTT = float(arg("--rt
 BUSY = int(arg("--busy", "0")); KEY = arg("--key", ""); authed = not KEY
 CFG = {"autorot": 0, "shake": 0, "psave": 1}; SSID2 = [""]; LEARN = [0]
 HAKO = {"set": "auto", "chg": 180, "hflip": 0, "imuhi": 1, "peek": 3, "deep": 90, "anymg": 60, "plog": 0}
+WALK = {"walker": 0, "pin": -1, "trim": 0, "inv": 0, "max": 60, "spd": 0, "us": 0, "show": 0, "face": 0,
+        "cmds": 0, "tmo": 0, "yaw": 0.0, "wz": 0.0}       # v0.12 歩行 (速さ1%あたり 1.5 度/秒 回るふり)
+WALK_T = [0.0]
 Q = []; stats_q = {"max": 0, "data": 0}       # 遅らせて返す返事 (送る時刻, 中身)
 def fwv(): return tuple(int(x) for x in FW.split("."))
 def out(j):
@@ -53,7 +56,12 @@ def status(): out(dict({"ok": True, "dev": "corematrix", "fw": FW, "bri": liveBr
                    **({"imu": "ok", "learn": LEARN[0], "cfg": dict(CFG), "batt": 3950, "lvl": 82, "chg": False,
                        "wnet": 1 if TCP else 0, "wsleep": 0, "ssid2": bool(SSID2[0])} if fwv() >= (0, 9, 6) else {}),
                    **({"mode": "hako" if HAKO["set"] == "on" else "home", "vbus": 5000,
-                       "hako": dict(HAKO, st=0, q=0, peeks=0, sleeps=0)} if fwv() >= (0, 10, 0) else {})))
+                       "hako": dict(HAKO, st=0, q=0, peeks=0, sleeps=0)} if fwv() >= (0, 10, 0) else {}),
+                   **({"walk": walk_now()} if fwv() >= (0, 12, 0) else {})))
+def walk_now():
+    now = time.monotonic()
+    if WALK["spd"] and now > WALK_T[0]: WALK["spd"] = 0; WALK["us"] = 0; WALK["tmo"] += 1
+    return dict(WALK)
 def names(): return sorted(FILES)
 def lst(): out({"ok": True, "list": True, "store": "sd", "sd": "ok", "free": 1000000, "cur": cur, "paused": paused,
                "files": [{"n": n, "s": len(FILES[n])} for n in names()]})
@@ -79,6 +87,12 @@ def handle(t, p):
             elif k == "hakoreset": pass
             elif k == "hakoev" and fwv() >= (0, 11, 1):
                 open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} HAKOEV {v}\n"); return out({"ok": True, "hakoev": "try" in HAKO})
+            elif k in ("walker", "sinv") and fwv() >= (0, 12, 0): WALK["walker" if k == "walker" else "inv"] = 1 if v[:1] in "1ot" else 0
+            elif k == "servo" and fwv() >= (0, 12, 0): WALK["pin"] = int(v) if int(v) not in (0, 1, 12, 13) else -1
+            elif k == "strim" and fwv() >= (0, 12, 0): WALK["trim"] = max(-150, min(150, int(v)))
+            elif k == "wmax" and fwv() >= (0, 12, 0): WALK["max"] = max(10, min(100, int(v)))
+            elif k == "strimtest" and fwv() >= (0, 12, 0): pass
+            elif k == "yawzero" and fwv() >= (0, 12, 0): WALK["yaw"] = 0.0; return out({"ok": True, "hakoev": False, "yaw": 0.0})
             elif k == "rotreset": LEARN[0] = 0
             elif k == "rotlearn": LEARN[0] += 1
             else: return err("bad config")
@@ -87,6 +101,14 @@ def handle(t, p):
     if t == 6:
         if not KEY or p.decode() == KEY: authed = True; return out({"ok": True, "auth": True})
         err("auth"); raise ConnectionAbortedError
+    if t == 8 and fwv() >= (0, 12, 0):           # WALK: 返事はしない
+        sp = struct.unpack("<b", p[:1])[0]; ttl = p[1] or 5
+        WALK["cmds"] += 1; WALK["spd"] = max(-WALK["max"], min(WALK["max"], sp)); WALK["show"] = 1
+        if p[2] != 0xFF: WALK["face"] = p[2]
+        WALK["us"] = 1500 + WALK["trim"] + ((50 + 4 * abs(WALK["spd"])) * (1 if WALK["spd"] > 0 else -1) if WALK["spd"] else 0)
+        WALK_T[0] = time.monotonic() + ttl / 10; WALK["yaw"] += WALK["spd"] * 1.5 * 0.15
+        open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} WALK {sp} {ttl} {p[2]}\n")
+        return
     if t == 1:
         stats["frames"] += 1; stats["last"] = p.hex(); live = True
         open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} F {p.hex()}\n")

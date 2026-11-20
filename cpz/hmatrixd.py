@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -48,6 +48,7 @@ STUDIO_CANDIDATES = [os.path.join(HERE, "..", "hexa-matrix-studio.html"),
                      os.path.join(HERE, "hexa-matrix-studio.html")]
 
 T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH, T_AUTH, T_CONFIG = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
+T_WALK = 0x08            # 歩行 (ファーム v0.12〜): int8 速さ% / u8 有効時間(0.1秒) / u8 顔
 T_BEGIN, T_DATA, T_END, T_LIST, T_DEL, T_PLAY = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15
 CHUNK = 200
 WIN_MAX = 16             # 返事を待たずに先へ送る DATA の数の上限 (本体が PING の "win" で教えてくれる、v0.9.5〜)
@@ -523,6 +524,68 @@ class Player:
             self.link.send(packet(T_PLAY, [0xFE]))     # 時間が来たので本体を番組へ戻す
 
 
+# ------------------------------------------------------------------ 歩行 (v0.12)
+class Walker:
+    """Stackchan Strider (CoreMatrix + FS90R) を歩かせる。
+
+    本体は WALK を 0.5 秒受け取らないと止まる。ここは 0.15 秒ごとに送り直す。
+    頼んだ側 (本体アプリ / ブラウザ) も HOLD 秒ごとに頼み直す。頼み直しが途切れたら (アプリが落ちた等) 止める。"""
+    PERIOD = 0.15
+    HOLD = 1.5
+
+    def __init__(self, link):
+        self.link = link
+        self.lock = threading.Lock()
+        self.speed = 0
+        self.face = 0
+        self.asked = 0.0
+        self.sent_stop = True
+        self.pinged = 0.0
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def set(self, speed=None, face=None):
+        with self.lock:
+            if speed is not None:
+                self.speed = max(-100, min(100, int(speed)))
+            if face is not None:
+                self.face = int(face) & 0xFF
+            self.asked = time.monotonic()
+            self.sent_stop = False
+            sp, fc = self.speed, self.face
+        self.link.send(packet(T_WALK, struct.pack("<bBB", sp, 5, fc)))   # すぐ1回 (反応を速く)
+        return self.state()
+
+    def stop(self):
+        return self.set(0)
+
+    def state(self):
+        return {"ok": True, "speed": self.speed, "face": self.face,
+                "walk": (self.link.status or {}).get("walk")}
+
+    def _run(self):
+        while True:
+            time.sleep(self.PERIOD)
+            send = None
+            with self.lock:
+                now = time.monotonic()
+                if self.speed and now - self.asked > self.HOLD:
+                    log("walk: 頼み直しが来ないので止めます")
+                    self.speed = 0
+                if not self.sent_stop:
+                    send = (self.speed, self.face)
+                    if not self.speed:
+                        self.sent_stop = True       # 止まれは1回送れば良い (本体は期限切れでも止まる)
+                ping = now - self.asked < 3 and now - self.pinged > 0.5
+                if ping:
+                    self.pinged = now
+            if not self.link.connected:
+                continue
+            if send:
+                self.link.send(packet(T_WALK, struct.pack("<bBB", send[0], 5, send[1])))
+            if ping:                                  # 歩かせている間は向き (ジャイロ) を細かく見る
+                self.link.send(packet(T_PING))
+
+
 # ------------------------------------------------------------------ ハブ本体
 class Hub:
     def __init__(self, link, libdir):
@@ -530,6 +593,7 @@ class Hub:
         self.lib = libdir
         os.makedirs(libdir, exist_ok=True)
         self.player = Player(link)
+        self.walker = Walker(link)
         self.busy = None             # 本体へ送っている最中 {"name","done","total"}
         self.busy_lock = threading.Lock()
         self.xfer_lock = threading.Lock()   # ファイル転送は同時に1つだけ (CPZ の転送とブラウザ中継の転送で共有)
@@ -772,6 +836,8 @@ class Hub:
 
     # ---- 本体の設定 (ファーム v0.9.6〜)
     CFG_KEYS = ("autorot", "shake", "psave", "rotreset", "rotlearn")
+    # v0.12 歩行: servo は GPIO 番号 (-1 で使わない)、strim は µs、wmax は %、ほかは true/false
+    WALK_KEYS = ("walker", "servo", "strim", "sinv", "wmax", "yawzero", "strimtest")
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
@@ -780,6 +846,8 @@ class Hub:
             raise RuntimeError("本体のファームを v0.9.6 以上にしてください (自動回転・振って次・省電力)")
         if any(k in opt for k in self.HAKO_KEYS) and not self.link.fw_at_least(0, 10, 0):
             raise RuntimeError("本体のファームを v0.10.0 以上にしてください (箱庭)")
+        if any(k in opt for k in self.WALK_KEYS) and not self.link.fw_at_least(0, 12, 0):
+            raise RuntimeError("本体のファームを v0.12.0 以上にしてください (歩行)")
         def val(k, v):
             if k == "hako":
                 return v if v in ("auto", "on", "off") else ("on" if v is True else "off" if v is False else "auto")
@@ -788,7 +856,7 @@ class Hub:
             if isinstance(v, (int, float)):
                 return str(int(v))
             raise ValueError(f"{k} の値が変です")
-        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS if k in opt]
+        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS if k in opt]
         if not items:
             raise ValueError("設定がありません")
         return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)
@@ -1057,6 +1125,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, HUB.ap("on" if j.get("on") else "off"))
             if path == "/api/ap/teach":
                 return self._send(200, HUB.ap_teach())
+            if path == "/api/walk":                          # {"speed":-100〜100, "face":0〜5} 1.5秒ごとに頼み直す
+                if not HUB.link.fw_at_least(0, 12, 0):
+                    raise RuntimeError("本体のファームを v0.12.0 以上にしてください (歩行)")
+                if j.get("speed"):
+                    HUB.player.stop()                        # CPZ から流している絵は止める (顔と混ざらない)
+                return self._send(200, HUB.walker.set(j.get("speed"), j.get("face")))
+            if path == "/api/walk/stop":
+                return self._send(200, HUB.walker.stop())
             return self._send(404, {"ok": False, "err": "not found"})
         except (ValueError, RuntimeError, KeyError, FileNotFoundError) as e:
             self._err(e if not isinstance(e, FileNotFoundError) else "見つかりません")

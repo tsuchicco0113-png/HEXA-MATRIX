@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HEXA MATRIX — CardputerZero 本体アプリ (v0.4)
+"""HEXA MATRIX — CardputerZero 本体アプリ (v0.11)
 
 CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd.py が持っていて、
 このアプリは http://127.0.0.1:8090 を通して頼む。
@@ -9,6 +9,7 @@ CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd
   2 ライブラリ: CPZ に置いた番組 (STUDIO の「CPZに置く」) を CPZ から流す / 本体SDへ送る
   3 本体      : CoreMatrix の中の番組を選んで流す・止める・消す
   4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / 箱庭 / 充電 / イベントAP / スマホから開くQR
+  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 SPACE 止まる (ファーム v0.12〜)
 右側の 16×16 は、いま CPZ から流している絵
 
 共通: ESC = ホームへ (ホームでは終了確認)  方向キー = F(↑) X(↓) Z(←) C(→)
@@ -36,17 +37,20 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
 TOP_H, BOT_H = 18, 16
 CFG_PATH = os.path.join(os.path.expanduser("~"), ".config", "hexa-matrix", "app.json")
 
-M_HOME, M_SAY, M_LIB, M_DEV, M_SET = range(5)
-SCREENS = [M_SAY, M_LIB, M_DEV, M_SET]
-NAMES = {M_SAY: "ことば", M_LIB: "ライブラリ", M_DEV: "本体", M_SET: "設定"}
-DESC = {M_SAY: "打った文字をすぐ流す", M_LIB: "CPZに置いた番組", M_DEV: "CoreMatrixの中の番組", M_SET: "向き・省電力・イベントAP"}
+M_HOME, M_SAY, M_LIB, M_DEV, M_SET, M_WALK = range(6)
+SCREENS = [M_SAY, M_LIB, M_DEV, M_SET, M_WALK]
+NAMES = {M_SAY: "ことば", M_LIB: "ライブラリ", M_DEV: "本体", M_SET: "設定", M_WALK: "歩く"}
+DESC = {M_SAY: "打った文字をすぐ流す", M_LIB: "CPZに置いた番組", M_DEV: "CoreMatrixの中の番組", M_SET: "向き・省電力・イベントAP",
+        M_WALK: "Strider を歩かせる"}
+WALK_FACES = ["おまかせ", "ふつう", "にっこり", "びっくり", "ねむい", "おこ"]
+SERVO_PINS = [-1, 23, 22, 24, 29, 5, 6, 7, 8, 10, 11]   # M5-Bus の GPIO (0/1 は I2C、12/13 は USB なので使わない)
 
 SHOWS = [("scrollL", "横流し"), ("static", "止めて"), ("wave", "波"), ("bounce", "往復"),
          ("blink", "点滅"), ("breathe", "呼吸"), ("scrollU", "縦送り"), ("scrollR", "右流し")]
@@ -162,6 +166,8 @@ class App:
         self.dev = None; self.dev_i = 0; self.dev_confirm = False
         self.set_i = 0; self.master = 3
         self.ap = None               # イベントAP の状態 (GET /api/ap)
+        self.walk = {"speed": 0, "set": int(c.get("wspeed", 40)), "face": 0}   # set = ↑↓で出す速さ
+        self.walk_i = 0; self.walk_sent = 0.0; self.walk_err = None
         self.msg = None; self.msg_until = 0
         self.confirm_quit = False
         self.dirty = True
@@ -245,24 +251,25 @@ class App:
     # ---- 画面
     def render(self):
         return {M_HOME: self.r_home, M_SAY: self.r_say, M_LIB: self.r_lib,
-                M_DEV: self.r_dev, M_SET: self.r_set}[self.mode]()
+                M_DEV: self.r_dev, M_SET: self.r_set, M_WALK: self.r_walk}[self.mode]()
 
     def r_home(self):
-        img, d = self.frame(None, "方向+ENTER / 1〜4 で選ぶ  ESC 終了")
-        pos = [(42, 62), (100, 62), (42, 120), (100, 120)]
+        img, d = self.frame(None, "方向+ENTER / 1〜5 で選ぶ  ESC 終了")
+        pos = [(32, 58), (86, 58), (32, 116), (86, 116), (140, 87)]    # 5つ目 (歩く) は右の段に
+        R = 26
         for i, (m, (cx, cy)) in enumerate(zip(SCREENS, pos)):
             on = i == self.sel
-            d.polygon(hexpts(cx, cy, 30), fill=DIM if on else (20, 22, 30))
+            d.polygon(hexpts(cx, cy, R), fill=DIM if on else (20, 22, 30))
             if on:
-                glow_hex(img, cx, cy, 30, ACC)
+                glow_hex(img, cx, cy, R, ACC)
                 d = ImageDraw.Draw(img)
             else:
-                pts = hexpts(cx, cy, 30); d.line(pts + [pts[0]], fill=(60, 64, 78), width=1)
+                pts = hexpts(cx, cy, R); d.line(pts + [pts[0]], fill=(60, 64, 78), width=1)
             name = NAMES[m]
             f = self.font_s if self.font_s.getlength(name) <= 46 else self.font_t
             d.text((cx - f.getlength(name) / 2, cy - 8), name, fill=FG if on else SUB, font=f)
             d.text((cx - 3, cy + 9), str(i + 1), fill=ACC if on else (90, 94, 108), font=self.font_t)
-        x0 = 150
+        x0 = 174
         m = SCREENS[self.sel]
         d.text((x0, 24), NAMES[m], fill=FG, font=self.font_b)
         d.text((x0, 50), DESC[m], fill=SUB, font=self.font_t)
@@ -501,7 +508,7 @@ class App:
         for kind, val in events:
             self.dirty = True
             fn = {M_HOME: self.k_home, M_SAY: self.k_say, M_LIB: self.k_lib,
-                  M_DEV: self.k_dev, M_SET: self.k_set}[self.mode]
+                  M_DEV: self.k_dev, M_SET: self.k_set, M_WALK: self.k_walk}[self.mode]
             if self.mode != M_SAY:
                 kind, val = nav([(kind, val)])[0]
             if fn(kind, val) == "quit":
@@ -524,11 +531,11 @@ class App:
             if val == "ESC":
                 self.confirm_quit = False
             return None
-        if kind == "CHAR" and val in "1234":
+        if kind == "CHAR" and val in "12345":
             self.sel = int(val) - 1; self.go(SCREENS[self.sel]); return None
         moves = {"LEFT": -1, "RIGHT": 1, "UP": -2, "DOWN": 2, "TAB": 1}
         if val in moves:
-            self.sel = (self.sel + moves[val]) % 4
+            self.sel = (self.sel + moves[val]) % len(SCREENS)
         elif val == "ENTER":
             self.go(SCREENS[self.sel])
         elif val == "ESC":
@@ -707,6 +714,123 @@ class App:
         elif key == "stop" and val == "ENTER":
             self.stop()
 
+    # ---- 歩く (v0.11、ファーム v0.12〜)
+    WALK_KEYS = ["speed", "face", "walker", "servo", "strim", "sinv", "wmax", "yawzero"]
+
+    def walk_items(self):
+        w = (self.hub.st.get("dev") or {}).get("walk")
+        if w is None:
+            return [("歩行", "要ファーム v0.12")]
+        pin = w.get("pin", -1)
+        rows = {"speed": ("↑↓で出す速さ", f"{self.walk['set']}%"),
+                "face": ("顔", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
+                "walker": ("歩くロボット", "入 (Grove 5V)" if w.get("walker") else "切"),
+                "servo": ("サーボの GPIO", "なし" if pin < 0 else f"G{pin}"),
+                "strim": ("中立の補正", f"{w.get('trim', 0):+d}µs"),
+                "sinv": ("前後", "入れ替え" if w.get("inv") else "そのまま"),
+                "wmax": ("速さの上限", f"{w.get('max', 60)}%"),
+                "yawzero": ("向きを0に", "ENTER")}
+        return [rows[k] for k in self.WALK_KEYS]
+
+    def r_walk(self):
+        img, d = self.frame("歩く", "↑前 ↓後 SPC止 TAB項目 ←→変更 ESC")
+        items = self.walk_items()
+        self.list_draw(d, items, self.walk_i if len(items) > 1 else 0, 178, top=22, row=16)
+        dv = self.hub.st.get("dev") or {}
+        w = dv.get("walk") or {}
+        x0 = 184
+        sp = self.walk["speed"]
+        # 進む向き (大きな矢印)
+        cx, cy = 222, 60
+        col = OKC if sp else (90, 94, 108)
+        if sp > 0:
+            d.polygon([(cx, cy - 26), (cx - 22, cy), (cx - 9, cy), (cx - 9, cy + 22), (cx + 9, cy + 22), (cx + 9, cy), (cx + 22, cy)], fill=col)
+        elif sp < 0:
+            d.polygon([(cx, cy + 26), (cx - 22, cy), (cx - 9, cy), (cx - 9, cy - 22), (cx + 9, cy - 22), (cx + 9, cy), (cx + 22, cy)], fill=col)
+        else:
+            d.rectangle((cx - 16, cy - 16, cx + 16, cy + 16), outline=col, width=3)
+        state = "前進" if sp > 0 else "後退" if sp < 0 else "止まっている"
+        d.text((x0, 92), f"{state} {abs(sp)}%" if sp else state, fill=FG, font=self.font_s)
+        y = 110
+        if w:
+            t = f"向き {w.get('yaw', 0):+.0f}° ({w.get('wz', 0):+.0f}°/s)"
+            d.text((x0, y), self.ellipsize(t, LCD_W - x0 - 3, self.font_t), fill=SUB, font=self.font_t); y += 12
+            if w.get("pin", -1) < 0:
+                d.text((x0, y), "サーボの GPIO を選んで", fill=NGC, font=self.font_t); y += 12
+            elif not w.get("walker"):
+                d.text((x0, y), "歩くロボットを入に", fill=NGC, font=self.font_t); y += 12
+        bv = dv.get("batt")
+        if isinstance(bv, int) and bv > 0 and y < 142:
+            d.text((x0, y), f"電池 {dv.get('lvl', '?')}% {bv / 1000:.2f}V", fill=SUB, font=self.font_t)
+        if self.walk_err:
+            d.text((x0, 140), self.ellipsize(self.walk_err, LCD_W - x0 - 3, self.font_t), fill=NGC, font=self.font_t)
+        self.toast_draw(img)
+        return img
+
+    def walk_send(self, speed=None):
+        """hub へ速さを頼む (待たない。裏で送る)"""
+        if speed is not None:
+            self.walk["speed"] = speed
+        body = {"speed": self.walk["speed"], "face": self.walk["face"]}
+        self.walk_sent = time.time()
+
+        def run():
+            try:
+                self.hub.call("POST", "/api/walk", body, timeout=1.5)
+                self.walk_err = None
+            except RuntimeError as e:
+                self.walk_err = str(e)
+            self.dirty = True
+        threading.Thread(target=run, daemon=True).start()
+
+    def walk_stop(self):
+        if self.walk["speed"] or time.time() - self.walk_sent < 3:
+            self.walk_send(0)
+
+    def k_walk(self, kind, val):
+        if val == "ESC":
+            self.walk_stop(); self.mode = M_HOME
+            return
+        if val == "UP":
+            self.walk_send(self.walk["set"]); return
+        if val == "DOWN":
+            self.walk_send(-self.walk["set"]); return
+        if (kind == "CHAR" and val == " ") or val == "BS":
+            self.walk_send(0); return
+        if val == "TAB":
+            self.walk_i = (self.walk_i + 1) % len(self.WALK_KEYS); return
+        if kind == "CHAR" and val in "123456":
+            self.walk["face"] = int(val) - 1; self.walk_send(); return
+        key = self.WALK_KEYS[self.walk_i]
+        w = (self.hub.st.get("dev") or {}).get("walk") or {}
+        if val not in ("LEFT", "RIGHT", "ENTER"):
+            return
+        step = -1 if val == "LEFT" else 1
+        cfgcall = lambda body, msg=None: self.ask("歩行の設定", lambda: self.hub.call("POST", "/api/device/config", body),
+                                                  (lambda r: self.toast(msg, 3)) if msg else None)
+        if key == "speed":
+            self.walk["set"] = max(10, min(100, self.walk["set"] + step * 5))
+            c = load_cfg(); c["wspeed"] = self.walk["set"]; save_cfg(c)
+            if self.walk["speed"]:
+                self.walk_send(self.walk["set"] if self.walk["speed"] > 0 else -self.walk["set"])
+        elif key == "face":
+            self.walk["face"] = (self.walk["face"] + step) % len(WALK_FACES); self.walk_send()
+        elif key == "walker":
+            on = not w.get("walker")
+            cfgcall({"walker": on}, "歩くロボットにしました (電池でも箱庭に入りません・Grove 5V 入)" if on else "歩くロボットをやめました")
+        elif key == "servo":
+            cur = w.get("pin", -1)
+            i = SERVO_PINS.index(cur) if cur in SERVO_PINS else 0
+            cfgcall({"servo": SERVO_PINS[(i + step) % len(SERVO_PINS)]})
+        elif key == "strim":
+            cfgcall({"strim": int(w.get("trim", 0)) + step * 5, "strimtest": True})   # 変えたら中立を2秒出して確かめる
+        elif key == "sinv":
+            cfgcall({"sinv": not w.get("inv")}, "前後を入れ替えました")
+        elif key == "wmax":
+            cfgcall({"wmax": max(10, min(100, int(w.get("max", 60)) + step * 10))})
+        elif key == "yawzero":
+            cfgcall({"yawzero": True}, "向きを 0 にしました")
+
     # ---- 結果を受け取る
     def drain(self):
         while not self.work.results.empty():
@@ -733,6 +857,8 @@ class App:
             now = time.time()
             if self.mode == M_SAY and now - last > 0.5:
                 self.dirty = True                      # カーソルの点滅
+            if self.mode == M_WALK and self.walk["speed"] and now - self.walk_sent > 0.5:
+                self.walk_send()                       # 頼み直し (hub は 1.5 秒来ないと止める)
             if self.msg and now > self.msg_until and self.msg_until:
                 self.msg_until = 0; self.dirty = True
             if self.dirty and now - last > 0.08:
@@ -756,7 +882,15 @@ def main():
             signal.signal(sg, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     reason = "?"
     try:
-        reason = App(Hub(a.hub), keys, fb).run()
+        app = App(Hub(a.hub), keys, fb)
+        try:
+            reason = app.run()
+        finally:
+            if app.walk["speed"]:
+                try:
+                    app.hub.call("POST", "/api/walk/stop", {}, timeout=1.0)   # 終わる時は必ず止める
+                except RuntimeError:
+                    pass
     except KeyboardInterrupt:
         reason = "Ctrl+C"
     except Exception:                                  # noqa: BLE001

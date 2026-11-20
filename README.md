@@ -1,4 +1,4 @@
-# HEXA MATRIX (v0.10)
+# HEXA MATRIX (v0.12)
 
 CoreMatrix (16×16 白色LED) に絵を出すための一式です。
 
@@ -305,3 +305,40 @@ Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 
 ### ファーム v0.9.3 — Wi-Fi の転送失敗・点滅の本当の原因
 - loop() で時刻 `now` を Wi-Fi の受け取り (netTick) より前に取っていたため、Wi-Fi で受けた直後に `now - 受けた時刻` が負 (符号なしで巨大) になり、受け取りを時間切れとして捨てる / 1コマ送りを「止んだ」として消灯する、をしていた。USB は先に読むので起きなかった。netTick の後で now を取り直し、比較を符号付きに
+
+## 歩行モード: Stackchan Strider (ファーム v0.12、CPZ アプリ v0.11、ハブ v0.12)
+
+[Stackchan Strider](https://github.com/Yeq6X/stackchan-strider) (Yeq6X さん、MIT) の4脚ベースを、
+CoreMatrix + 18350×2 ベース + 連続回転サーボ **FEETECH FS90R** で歩かせます (改造部品は `cm_variant.py` の horn_hub / cm_yoke / cm_cradle)。
+
+### つなぎ方
+
+| FS90R の線 | つなぐ先 |
+|---|---|
+| 赤 (+) | Grove (PORT.A) の **赤 = 5V** (ファームが M5IOE1 の IO5 で 5V を入れる。最大 470mA) |
+| 茶 (−) | Grove の **黒 = GND** |
+| 橙 (信号) | M5-Bus の GPIO (既定なし。CPZ の「歩く」→ サーボの GPIO で選ぶ。例 G23) |
+
+- **Grove の黄・白 (G0/G1) にはつながない**。本体の中の I2C (IMU・LED・電源) と同じ線です。ファームも 0/1/12/13 は選べません
+- サーボの電源に 470µF くらいのコンデンサを並列に入れると、動き出しで電圧が落ちにくくなります
+
+### 使い方 (CPZ)
+
+1. ホームの **5 歩く** (またはキー 5)
+2. 「歩くロボット」を入 → 電池でも箱庭に入らず Wi-Fi のまま、Grove の 5V が入る (本体に覚える)
+3. 「サーボの GPIO」を選ぶ。「中立の補正」を ←→ で変えると2秒だけ中立を出すので、サーボが止まる値に合わせる
+   (FS90R は底のトリマーでも合わせられます)
+4. **↑ 前進 / ↓ 後退 / SPACE 止まる**。1〜6 で顔。逆に歩く時は「前後」を入れ替え
+
+- 安全: 本体は WALK が 0.5 秒来ないと止まる。ハブは CPZ アプリからの頼み直しが 1.5 秒来ないと止める。アプリを閉じても止まる。
+  本体のボタンを押しても止まる
+- 速さの上限は既定 60% (原作のシミュレーションで 100% は跳ねて進みが落ちるため)
+- 「向き」はジャイロで数えた床の上の回転 (度)。その場で回る歩かせ方を探す・角度で止める、の下準備です (`yawzero=1` で 0)
+
+### パケット・API
+
+- WALK (0x08) len=3: int8 速さ -100〜100% / u8 有効時間 (0.1 秒単位、0 は 0.5 秒) / u8 顔 (0=おまかせ、1〜5、0xFF=そのまま)。返事なし
+- CONFIG: `walker=0/1` `servo=GPIO (-1 で使わない)` `strim=µs` `sinv=0/1` `wmax=%` `yawzero=1` `strimtest=1`
+- PING: `"walk":{"walker","pin","trim","inv","max","spd","us","show","face","cmds","tmo","yaw","wz"}`
+- ハブ: `POST /api/walk {"speed":40,"face":2}` (1.5 秒ごとに頼み直す) / `POST /api/walk/stop`
+- PC でのテスト: `g++ -std=c++17 tests/walk_test.cpp && ./a.out`、`python3 tests/fakecm.py --fw 0.12.0`
