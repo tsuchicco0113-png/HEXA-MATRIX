@@ -73,6 +73,7 @@ class Keys:
             raise
         self.debug = debug
         self.held = set()
+        self.ev_codes = []
         self.shift_once = False
         self.caps = False
         cfg = cfg or {}
@@ -96,6 +97,7 @@ class Keys:
 
     def poll(self, timeout=0.0):
         events = []
+        self.ev_codes = []                   # events と同じ並びで、それを出したキーのコード (押しっぱなしの判定用)
         for code, value in self._raw(timeout):
             if self.debug and value == 1:
                 print("key", code, flush=True)
@@ -117,18 +119,18 @@ class Keys:
             # fn = 設定で指定したキー、または「知らないキー」が押されている状態
             fn = any(c in self.fn_codes or c not in KNOWN for c in self.held if c != code)
             if fn and code in self.fn_map:
-                events.append(("ACT", self.fn_map[code]))
+                events.append(("ACT", self.fn_map[code])); self.ev_codes.append(code)
                 continue
             if fn and code in FN_ARROWS:
-                events.append(("ACT", FN_ARROWS[code]))
+                events.append(("ACT", FN_ARROWS[code])); self.ev_codes.append(code)
                 continue
             if code in ACTIONS:
-                events.append(("ACT", ACTIONS[code]))
+                events.append(("ACT", ACTIONS[code])); self.ev_codes.append(code)
                 continue
             shift = K_LSHIFT in self.held or K_RSHIFT in self.held or self.shift_once
             if self.caps and CHARS[code][0].isalpha():
                 shift = not shift                # CapsLock は英字だけに効かせる (1 → ! にしない)
-            events.append(("CHAR", CHARS[code][1 if shift else 0]))
+            events.append(("CHAR", CHARS[code][1 if shift else 0])); self.ev_codes.append(code)
             self.shift_once = False
         return events
 

@@ -9,7 +9,8 @@ CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd
   2 ライブラリ: CPZ に置いた番組 (STUDIO の「CPZに置く」) を CPZ から流す / 本体SDへ送る
   3 本体      : CoreMatrix の中の番組を選んで流す・止める・消す
   4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / 箱庭 / 充電 / イベントAP / スマホから開くQR
-  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 SPACE 止まる 1〜7 顔 (7 = 箱庭のキャラ) (ファーム v0.12〜)
+  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 (押している間だけ / 押したら続く を選べる)
+                W/S 前/後ろへ N 歩 SPACE 止まる 1〜7 顔 (7 = 箱庭のキャラ) (ファーム v0.12〜)
 右側の 16×16 は、いま CPZ から流している絵
 
 共通: ESC = ホームへ (ホームでは終了確認)  方向キー = F(↑) X(↓) Z(←) C(→)
@@ -37,7 +38,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.12.2"
+VERSION = "0.12.3"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -168,6 +169,13 @@ class App:
         self.ap = None               # イベントAP の状態 (GET /api/ap)
         self.walk = {"speed": 0, "set": int(c.get("wspeed", 40)), "face": 0}   # set = ↑↓で出す速さ
         self.walk_i = 0; self.walk_sent = 0.0; self.walk_err = None
+        # v0.12.3: 押している間だけ歩く (hold) / 押したら歩き続ける、と「ちょっと歩く」(W/S で N 歩)
+        self.walk_hold = bool(c.get("whold", True))
+        self.walk_steps = int(c.get("wsteps", 5))
+        self.walk_steptime = float(c.get("wsteptime", 0.6))      # 1 歩 (クランク 1 周) にかかる秒。見ながら合わせる
+        self.walk_hold_code = None          # 押しっぱなしで歩いている時のキー
+        self.walk_until = 0.0               # ちょっと歩く: この時刻で止める
+        self.cur_code = None
         self.msg = None; self.msg_until = 0
         self.confirm_quit = False
         self.dirty = True
@@ -506,7 +514,9 @@ class App:
 
     # ---- 操作
     def handle(self, events):
-        for kind, val in events:
+        codes = list(getattr(self.keys, "ev_codes", []) or [])
+        for i, (kind, val) in enumerate(events):
+            self.cur_code = codes[i] if i < len(codes) else None
             self.dirty = True
             fn = {M_HOME: self.k_home, M_SAY: self.k_say, M_LIB: self.k_lib,
                   M_DEV: self.k_dev, M_SET: self.k_set, M_WALK: self.k_walk}[self.mode]
@@ -719,7 +729,7 @@ class App:
             self.stop()
 
     # ---- 歩く (v0.11、ファーム v0.12〜)
-    WALK_KEYS = ["speed", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
+    WALK_KEYS = ["speed", "hold", "steps", "steptime", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -727,6 +737,9 @@ class App:
             return [("歩行", "要ファーム v0.12")]
         pin = w.get("pin", -1)
         rows = {"speed": ("↑↓で出す速さ", f"{self.walk['set']}%"),
+                "hold": ("↑↓の操作", "押してる間" if self.walk_hold else "押したら続く"),
+                "steps": ("W/S ちょっと歩く", f"{self.walk_steps}歩"),
+                "steptime": ("1歩の時間", f"{self.walk_steptime:.1f}秒"),
                 "face": ("顔", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
                 "wchar": ("おまかせの顔", ("箱庭のキャラ" if w.get("wchar") else "スタックチャン") if "wchar" in w else "要v0.13"),
                 "walker": ("歩くロボット", "入 (Grove 5V)" if w.get("walker") else "切"),
@@ -740,7 +753,7 @@ class App:
         return [rows[k] for k in self.WALK_KEYS]
 
     def r_walk(self):
-        img, d = self.frame("歩く", "↑前 ↓後 SPC止 TAB項目 ←→変更 ESC")
+        img, d = self.frame("歩く", ("↑↓押す間" if self.walk_hold else "↑前↓後") + f" W/S {self.walk_steps}歩 SPC止 TAB ←→ ESC")
         items = self.walk_items()
         self.list_draw(d, items, self.walk_i if len(items) > 1 else 0, 178, top=22, row=16)
         dv = self.hub.st.get("dev") or {}
@@ -757,6 +770,8 @@ class App:
         else:
             d.rectangle((cx - 16, cy - 16, cx + 16, cy + 16), outline=col, width=3)
         state = "前進" if sp > 0 else "後退" if sp < 0 else "止まっている"
+        if sp and self.walk_until:
+            state += f" 残り{max(0.0, self.walk_until - time.time()):.1f}s"
         d.text((x0, 92), f"{state} {abs(sp)}%" if sp else state, fill=FG, font=self.font_s)
         y = 110
         if w:
@@ -798,11 +813,16 @@ class App:
         if val == "ESC":
             self.walk_stop(); self.mode = M_HOME
             return
-        if val == "UP":
-            self.walk_send(self.walk["set"]); return
-        if val == "DOWN":
-            self.walk_send(-self.walk["set"]); return
+        if val in ("UP", "DOWN"):
+            self.walk_until = 0.0
+            self.walk_hold_code = self.cur_code if self.walk_hold else None   # 離したら止める (run で見る)
+            self.walk_send(self.walk["set"] if val == "UP" else -self.walk["set"]); return
+        if kind == "CHAR" and val in "wWsS":            # ちょっと歩く: N 歩ぶんの時間だけ歩いて止まる
+            self.walk_hold_code = None
+            self.walk_until = time.time() + self.walk_steps * self.walk_steptime
+            self.walk_send(self.walk["set"] if val in "wW" else -self.walk["set"]); return
         if (kind == "CHAR" and val == " ") or val == "BS":
+            self.walk_until = 0.0; self.walk_hold_code = None
             self.walk_send(0); return
         if val == "TAB":
             self.walk_i = (self.walk_i + 1) % len(self.WALK_KEYS); return
@@ -815,7 +835,16 @@ class App:
         step = -1 if val == "LEFT" else 1
         cfgcall = lambda body, msg=None: self.ask("歩行の設定", lambda: self.hub.call("POST", "/api/device/config", body),
                                                   (lambda r: self.toast(msg, 3)) if msg else None)
-        if key == "speed":
+        if key == "hold":
+            self.walk_hold = not self.walk_hold
+            c = load_cfg(); c["whold"] = self.walk_hold; save_cfg(c)
+        elif key == "steps":
+            self.walk_steps = max(1, min(20, self.walk_steps + step))
+            c = load_cfg(); c["wsteps"] = self.walk_steps; save_cfg(c)
+        elif key == "steptime":
+            self.walk_steptime = round(max(0.2, min(3.0, self.walk_steptime + step * 0.1)), 1)
+            c = load_cfg(); c["wsteptime"] = self.walk_steptime; save_cfg(c)
+        elif key == "speed":
             self.walk["set"] = max(10, min(100, self.walk["set"] + step * 5))
             c = load_cfg(); c["wspeed"] = self.walk["set"]; save_cfg(c)
             if self.walk["speed"]:
@@ -870,8 +899,16 @@ class App:
             now = time.time()
             if self.mode == M_SAY and now - last > 0.5:
                 self.dirty = True                      # カーソルの点滅
-            if self.mode == M_WALK and self.walk["speed"] and now - self.walk_sent > 0.5:
-                self.walk_send()                       # 頼み直し (hub は 1.5 秒来ないと止める)
+            if self.mode == M_WALK and self.walk["speed"]:
+                held = getattr(self.keys, "held", None)
+                if self.walk_hold_code is not None and held is not None and self.walk_hold_code not in held:
+                    self.walk_hold_code = None; self.walk_send(0); self.dirty = True     # 離した → 止まる
+                elif self.walk_until and now >= self.walk_until:
+                    self.walk_until = 0.0; self.walk_send(0); self.dirty = True          # ちょっと歩く: 時間が来た
+                elif now - self.walk_sent > 0.5:
+                    self.walk_send()                   # 頼み直し (hub は 1.5 秒来ないと止める)
+                if self.walk_until:
+                    self.dirty = True
             if self.msg and now > self.msg_until and self.msg_until:
                 self.msg_until = 0; self.dirty = True
             if self.dirty and now - last > 0.08:
