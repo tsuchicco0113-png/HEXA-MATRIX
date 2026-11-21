@@ -93,6 +93,7 @@
 //     その場で速く回ると目が回る、止まって静かにしていると寝る (寝息)、また歩き出すと起きてびっくり
 //   v0.13.1: STUDIO で箱庭のキャラを保存し直したら、歩行中のキャラもそのキャラに替わる (以前は再起動まで前のまま)
 //   v0.13.2: 緑の電源 LED (M5PM1 LED_EN) を消せる設定 pled (CONFIG pled=0)。M5Unified は起動のたびに点けるので起動後に毎回反映
+//   v0.13.3: 歩行の加速・減速をゆっくりに (wacc / wdec ms)。前寄りの重心で、止まる時の慣性で前に倒れるのを防ぐ
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -115,7 +116,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.2";
+static const char* FW_VER = "0.13.3";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -347,9 +348,11 @@ static void sendStatus() {
               hcOk ? hcName : "", hakoPreview ? "true" : "false", cfgPled ? 1 : 0);
   // v0.12: 歩行
   out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
-              "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f}}\n",
+              "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
+              "\"acc\":%u,\"dec\":%u,\"out\":%d}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
-              walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate);
+              walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
+              wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out));
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -785,6 +788,7 @@ static void servoWrite(uint16_t us) {
   if (servoPinOn >= 0) ledcWrite(servoPinOn, us ? hxm_walk_duty(us, SERVO_BITS) : 0);
   servoUs = us;
 }
+static void walkOut(uint32_t now);
 /// Grove の 5V (サーボの電源)。歩くロボットの時だけ入れる
 static void walkPower() {
   if (M5.getBoard() != m5::board_t::board_M5CoreMatrix) return;
@@ -796,6 +800,7 @@ static void walkStop(bool hide) {
     walk.command(0, 5, 0xFF, millis());
     walk.pulsing = false;
   }
+  walk.halt();
   if (servoUs) servoWrite(0);
   if (hide) { walkShow = false; wchOn = false; }
 }
@@ -855,8 +860,15 @@ static void handleWalk() {
   if (walk.moving) wchPace = walk.spd > 0 ? 1 : -1;   // 後退はキャラも逆向き
   (void)prevSpd;
   if (was && !walk.moving) walkIdleAt = now;
-  servoWrite(hxm_walk_us(wcfg, walk.spd));
+  walkOut(now);                                       // v0.13.3: 速さは walkOut でゆっくり寄せる
   walkDraw(now);
+}
+/// v0.13.3: 出す速さを指令へゆっくり寄せてサーボへ (同じ値なら書かない)
+static void walkOut(uint32_t now) {
+  int o = walk.ramp(now, wcfg);
+  if (!walk.pulsing) return;
+  uint16_t us = hxm_walk_us(wcfg, o);
+  if (us != servoUs) servoWrite(us);
 }
 /// 毎回: 期限切れで止める・中立の後にパルスを止める・顔・ジャイロで向きを数える
 static void walkTick(uint32_t now) {
@@ -873,7 +885,8 @@ static void walkTick(uint32_t now) {
     }
     yawAt = now;
   }
-  if (walk.tick(now)) { walkIdleAt = now; servoWrite(hxm_walk_us(wcfg, 0)); }
+  if (walk.tick(now)) walkIdleAt = now;               // 期限切れ: 指令を 0 に (速さは walkOut でゆっくり落とす)
+  if (walk.pulsing) walkOut(now); else walk.rampAt = now;
   if (!walk.moving && !walk.pulsing && servoUs) servoWrite(0);
   if (walkShow && (int32_t)(now - holdUntil) >= 0) {
     static uint32_t lastFace = 0;
@@ -886,6 +899,8 @@ static void loadWalkCfg() {
   wcfg.trim  = prefs.getShort("wtrm", 0);
   wcfg.inv   = prefs.getBool("winv", false);
   wcfg.maxPct = prefs.getUChar("wmax", 60);
+  wcfg.accMs  = prefs.getUShort("wacc", 300);
+  wcfg.decMs  = prefs.getUShort("wdec", 900);
   cfgWalkChar = prefs.getBool("wch", false);
 }
 
@@ -999,6 +1014,8 @@ static void handleConfig() {
                                        if (servoUs && !walk.moving) servoWrite(hxm_walk_us(wcfg, 0)); }
       else if (!strcmp(k, "sinv")) { wcfg.inv = on; prefs.putBool("winv", on); }
       else if (!strcmp(k, "wmax")) { int n = atoi(v); wcfg.maxPct = (uint8_t)(n < 10 ? 10 : n > 100 ? 100 : n); prefs.putUChar("wmax", wcfg.maxPct); }
+      else if (!strcmp(k, "wacc")) { int n = atoi(v); wcfg.accMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wacc", wcfg.accMs); }
+      else if (!strcmp(k, "wdec")) { int n = atoi(v); wcfg.decMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wdec", wcfg.decMs); }
       else if (!strcmp(k, "yawzero")) { if (on) yawDeg = 0.f; evOnly = true; }
       else if (!strcmp(k, "wchar")) { cfgWalkChar = on; prefs.putBool("wch", on); }
       else if (!strcmp(k, "strimtest")) {                           // 中立を確かめる: いまの strim の中立を 2 秒出す

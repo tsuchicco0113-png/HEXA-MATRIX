@@ -61,6 +61,7 @@ def status(): out(dict({"ok": True, "dev": "corematrix", "fw": FW, "bri": liveBr
                    **({"walk": walk_now()} if fwv() >= (0, 12, 0) else {})))
 def walk_now():
     now = time.monotonic()
+    if fwv() >= (0, 13, 3): WALK.setdefault("acc", 300); WALK.setdefault("dec", 900)
     if WALK["spd"] and now > WALK_T[0]: WALK["spd"] = 0; WALK["us"] = 0; WALK["tmo"] += 1
     return dict(WALK)
 def names(): return sorted(FILES)
@@ -93,6 +94,7 @@ def handle(t, p):
             elif k == "servo" and fwv() >= (0, 12, 0): WALK["pin"] = int(v) if int(v) not in (0, 1, 12, 13) else -1
             elif k == "strim" and fwv() >= (0, 12, 0): WALK["trim"] = max(-150, min(150, int(v)))
             elif k == "wmax" and fwv() >= (0, 12, 0): WALK["max"] = max(10, min(100, int(v)))
+            elif k in ("wacc", "wdec") and fwv() >= (0, 13, 3): WALK[k[1:]] = max(0, min(3000, int(v)))
             elif k == "strimtest" and fwv() >= (0, 12, 0): pass
             elif k == "yawzero" and fwv() >= (0, 12, 0): WALK["yaw"] = 0.0; return out({"ok": True, "hakoev": False, "yaw": 0.0})
             elif k == "rotreset": LEARN[0] = 0

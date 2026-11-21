@@ -25,6 +25,29 @@ int main() {
   assert(w.pulsing); w.tick(1700); assert(w.pulsing); w.tick(1802); assert(!w.pulsing);   // 中立 0.3 秒の後パルスを止める
   w.command(-30, 2, 0xFF, 2000); assert(w.moving && w.until == 2200);
   w.command(0, 5, 3, 2100); assert(!w.moving && w.face == 3);
+  {   // v0.13.3: 加速・減速のランプ
+    HxmWalkCfg c2;                       // acc 300ms / dec 900ms、上限 60%
+    HxmWalk v;
+    v.command(60, 50, 0, 10000); v.rampAt = 10000;
+    assert(v.ramp(10000, c2) == 0);
+    assert(v.ramp(10090, c2) == 30);     // 90ms で 30%
+    assert(v.ramp(10180, c2) == 60);     // 上限で止まる
+    assert(v.ramp(10300, c2) == 60);
+    v.command(0, 5, 0xFF, 10300);        // 止める指令: すぐ 0 にはしない
+    assert(v.ramp(10390, c2) == 50);     // 90ms で 10% ずつ落とす
+    assert(v.pulsing);
+    int o = 0; uint32_t t = 10390;
+    while (t < 11000) { t += 30; o = v.ramp(t, c2); v.tick(t); }
+    assert(o == 0 && v.out == 0.f && v.pulsing);            // 止まりきった直後はまだ中立を出す
+    v.tick(t + 400); assert(!v.pulsing);                     // 中立 0.3 秒の後にパルスを止める
+    v.command(60, 50, 0, 20000); v.rampAt = 20000; v.ramp(20200, c2); v.ramp(20400, c2);   // 前へ 60%
+    v.command(-60, 50, 0, 20400);        // いきなり後ろ: まず減速 (dec) してから加速 (acc)
+    assert(v.ramp(20490, c2) == 50);
+    t = 20490; while (v.out > 0.f) { t += 30; v.ramp(t, c2); }
+    assert(v.ramp(t + 60, c2) <= -19);   // 0 を越えたら acc の速さで後ろへ
+    c2.decMs = 0; v.command(0, 5, 0xFF, 30000); assert(v.ramp(30010, c2) == 0);   // dec 0 = すぐ止まる
+    puts("ramp ok");
+  }
   uint16_t r[16];
   for (int f = 1; f < HXW_FACE_N; f++) { hxm_walk_face(r, f, f == 2 ? 1 : f == 3 ? -1 : 0, 500); show(r); }
   puts("walk ok");

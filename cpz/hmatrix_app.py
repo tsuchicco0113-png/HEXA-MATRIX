@@ -37,7 +37,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.12.1"
+VERSION = "0.12.2"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -719,7 +719,7 @@ class App:
             self.stop()
 
     # ---- 歩く (v0.11、ファーム v0.12〜)
-    WALK_KEYS = ["speed", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "yawzero"]
+    WALK_KEYS = ["speed", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -734,6 +734,8 @@ class App:
                 "strim": ("中立の補正", f"{w.get('trim', 0):+d}µs"),
                 "sinv": ("前後", "入れ替え" if w.get("inv") else "そのまま"),
                 "wmax": ("速さの上限", f"{w.get('max', 60)}%"),
+                "wdec": ("止まる時のゆっくり", f"{w['dec'] / 1000:.1f}秒" if "dec" in w else "要v0.13.3"),
+                "wacc": ("動き出しのゆっくり", f"{w['acc'] / 1000:.1f}秒" if "acc" in w else "要v0.13.3"),
                 "yawzero": ("向きを0に", "ENTER")}
         return [rows[k] for k in self.WALK_KEYS]
 
@@ -836,6 +838,9 @@ class App:
             cfgcall({"sinv": not w.get("inv")}, "前後を入れ替えました")
         elif key == "wmax":
             cfgcall({"wmax": max(10, min(100, int(w.get("max", 60)) + step * 10))})
+        elif key in ("wdec", "wacc") and (key[1:] in w):     # v0.13.3: 0.1 秒きざみ (0〜3 秒)
+            cur = int(w.get(key[1:], 0))
+            cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})
         elif key == "yawzero":
             cfgcall({"yawzero": True}, "向きを 0 にしました")
 

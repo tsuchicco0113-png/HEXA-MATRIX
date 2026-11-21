@@ -22,6 +22,8 @@ struct HxmWalkCfg {
   uint8_t  maxPct = 60;  // 速さの上限 % (原作のシミュレーションでは 100% だと跳ねて進みが落ちる)
   uint16_t dead = 50;    // 中立から動き出すまでの µs (FS90R の不感帯 90µs の半分 + 余裕)
   uint16_t span = 400;   // 100% のときの中立からの µs (dead を含まない)
+  uint16_t accMs = 300;  // v0.13.3: 0 → 100% にかける時間 (動き出しのつんのめり防止)
+  uint16_t decMs = 900;  // v0.13.3: 100% → 0 にかける時間 (止まる時の慣性で前に倒れないように)
 };
 
 /// 速さ % → パルス幅 µs。0 は中立
@@ -63,6 +65,28 @@ struct HxmWalk {
   bool     moving = false;
   bool     pulsing = false;    // パルスを出している
   uint32_t cmds = 0, timeouts = 0;
+  float    out = 0.f;          // v0.13.3: 実際にサーボへ出している速さ % (指令へ向けてゆっくり寄せる)
+  uint32_t rampAt = 0;
+
+  /// 出す速さを指令へ寄せる。速くする時は accMs、遅くする・止める・逆へ回す時は decMs で 100% 分動く
+  int ramp(uint32_t now, const HxmWalkCfg& c) {
+    float dt = rampAt ? (float)(uint32_t)(now - rampAt) : 0.f;
+    rampAt = now;
+    if (dt > 200.f) dt = 200.f;
+    int lim = c.maxPct > 100 ? 100 : c.maxPct;
+    float tgt = moving ? (float)(spd > lim ? lim : spd < -lim ? -lim : spd) : 0.f;
+    if (out == tgt) return (int)out;
+    bool speedUp = (tgt > 0 && out >= 0 && tgt > out) || (tgt < 0 && out <= 0 && tgt < out);
+    uint16_t ms = speedUp ? c.accMs : c.decMs;
+    float step = ms ? 100.f * dt / (float)ms : 1000.f;
+    float before = out;
+    if (out < tgt) { out += step; if (out > tgt) out = tgt; }
+    else           { out -= step; if (out < tgt) out = tgt; }
+    if (out == 0.f && before != 0.f && !moving) stopAt = now;   // 止まりきった所から中立 0.3 秒
+    float a = out < 0 ? -out : out;
+    return a < 0.5f ? 0 : (int)(out < 0 ? out - 0.5f : out + 0.5f);
+  }
+  void halt() { out = 0.f; }                                    // すぐ止める (番組へ移る時など)
 
   /// WALK パケット。戻り値: 動きが変わった
   bool command(int8_t s, uint8_t ttl, uint8_t f, uint32_t now) {
@@ -81,7 +105,7 @@ struct HxmWalk {
       moving = false; spd = 0; stopAt = now; timeouts++;
       return true;
     }
-    if (!moving && pulsing && (int32_t)(now - stopAt) > 300) pulsing = false;   // 中立 0.3 秒 → パルスを止める
+    if (!moving && pulsing && out == 0.f && (int32_t)(now - stopAt) > 300) pulsing = false;   // 中立 0.3 秒 → パルスを止める
     return false;
   }
 };
