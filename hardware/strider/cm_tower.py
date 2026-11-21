@@ -54,6 +54,9 @@ def tower_part() -> Manifold:
     for sx in (1, -1):
         sleeve -= box(sx * OUT_X - 3 if sx > 0 else -OUT_X - 1, sx * OUT_X + 1 if sx > 0 else -OUT_X + 3,
                       DY - 7.0, DY + 7.0, Z0 + 4.0, SHELF_BOT - 3.0)
+    # ｻｰﾎﾞに当たる所は窓にする(DY を大きくすると背面がｻｰﾎﾞにかかるため)
+    bx = c.servo_body_x()
+    sleeve -= box(bx - c.SV_L / 2 - 0.8, bx + c.SV_L / 2 + 0.8, -c.SV_W / 2 - 0.8, c.SV_W / 2 + 0.8, Z0 - 1, SHELF_BOT - 0.01)
     # ほぞの台座(天板の角穴の上)
     pads = Manifold()
     for x, y in c.CR_TENONS:
