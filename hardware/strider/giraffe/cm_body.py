@@ -25,7 +25,7 @@ FLOOR_BOT = c.PLATE_BOT          # 46.5  体の底面(= 旧 cm_yoke 天板の下
 FLOOR_TOP = c.PLATE_TOP          # 49.5  ｻｰﾎﾞの耳が載る面
 SERVO_TOP = FLOOR_TOP + c.SV_EAR_HI   # 68.7 逆さｻｰﾎﾞの底(上を向く)
 WALL = 2.0
-CLR = 0.3
+CLR = 0.5                        # 受け台 v2 の試作で 0.3 はｷﾂかった
 IN_X = c.CM_W / 2 + CLR          # 内のり半幅(X)
 DEPTH = c.CM_DEPTH               # 38.3 ｽﾀｯｸの奥行き
 IN_Y = DEPTH / 2 + CLR           # 内のり半幅(Y)。ｽﾀｯｸは回転軸の真上に中心を置く
@@ -106,9 +106,19 @@ def dock_part() -> Manifold:
         cuts += relief.extrude(3.4).translate((0, 0, d.COLLAR_Z0 + d.COLLAR_LUG_T))
     ring = (outline - circle(DOCK_HOLE_R, seg=96)).extrude(DOCK_T).translate((0, 0, DOCK_BOT))
     body = yoke + columns + ring
-    for x, y in PIN_XY:
-        body += cyl(PIN_R, DOCK_TOP - 0.01, DOCK_TOP + PIN_H, 32).translate((x, y, 0))
+    for x, y in PIN_XY:   # 回り止めは別部品のﾋﾟﾝ(peg)を押し込む穴。ﾄﾞｯｸはﾘﾝｸﾞを下にして刷るので上向きの突起は作らない
+        body -= cyl(PIN_R - 0.05, DOCK_BOT - 1, DOCK_TOP + 1, 32).translate((x, y, 0))
     return body - cuts
+
+
+@lru_cache(maxsize=None)
+def peg_part() -> Manifold:
+    """回り止めﾋﾟﾝ(2 本 + 予備)。ﾄﾞｯｸの穴に押し込み、上 PIN_H を体の底の穴へ。両端を面取り"""
+    L = DOCK_T + PIN_H
+    core = Manifold.cylinder(L - 0.8, PIN_R, PIN_R, 32).translate((0, 0, 0.4))
+    core += Manifold.cylinder(0.4, PIN_R - 0.4, PIN_R, 32)
+    core += Manifold.cylinder(0.4, PIN_R, PIN_R - 0.4, 32).translate((0, 0, L - 0.4))
+    return core
 
 
 @lru_cache(maxsize=None)

@@ -20,8 +20,8 @@ import cm_variant as c
 import cm_body as b
 from design import box, cyl, rect
 
-NECK_RISE = float(os.environ.get("GIRAFFE_RISE", 30.0))   # 頭を上げる量(前の体ﾓｼﾞｭｰﾙ比)
-HEAD_DY = float(os.environ.get("GIRAFFE_DY", 12.0))       # 頭を前へ出す量
+NECK_RISE = float(os.environ.get("GIRAFFE_RISE", 20.0))   # 頭を上げる量(前の体ﾓｼﾞｭｰﾙ比)
+HEAD_DY = float(os.environ.get("GIRAFFE_DY", 6.0))       # 頭を前へ出す量
 
 # ---------------------------------------------------------------- 胴
 WALL = 2.0
@@ -35,7 +35,8 @@ SCREW_Z = BAY_TOP - SKIRT_H / 2
 LID_T = 2.0
 
 # ---------------------------------------------------------------- 首と頭
-SHELF_T = 2.4
+SHELF_T = 3.2                                    # 受け台 v4 と同じ(配線溝を掘っても割れない)
+GROOVE_D, GROOVE_W = 1.6, 7.0
 SHELF_BOT = b.SHELF_BOT + NECK_RISE
 SHELF_TOP = SHELF_BOT + SHELF_T
 FLARE_H = 9.0                                    # 首から頭の受けへ広がる部分
@@ -43,7 +44,8 @@ NECK_HX, NECK_HY = 13.0, 9.5                     # 首の外形(半幅)
 NECK_IN = 2.2                                    # 首の肉厚
 STACK_Y0 = -b.DEPTH / 2 + HEAD_DY
 STACK_Y1 = b.DEPTH / 2 + HEAD_DY
-GRIP_H = 12.0
+GRIP_H = 22.0                                    # 背板の高さ(受け台と同じ)
+SIDE_H = 14.0                                    # 側壁の高さ(受け台と同じ)
 
 b.PIN_XY[:] = [(22.0, 22.0), (-22.0, 22.0)]      # 胴が前へずれたのでﾄﾞｯｸのﾋﾟﾝも前側へ(前後非対称)
 
@@ -94,18 +96,28 @@ def neck_part() -> Manifold:
     # 首: 頭と同じ太さでまっすぐ立てた角筒
     neck = outline().extrude(SHELF_BOT - BAY_TOP).translate((0, 0, BAY_TOP))
     # 中は漏斗形にくり抜く(棚がｻﾎﾟｰﾄなしで刷れるよう、上へ 45°前後ですぼめてｹｰﾌﾞﾙ穴へつなぐ)
-    neck -= _loft(outline(WALL), BAY_TOP - 0.01, _rr(6.0, 4.0, 2.0, -8.0, STACK_Y0 + 5.0), SHELF_TOP + 0.5)
+    gy1 = STACK_Y0 + c.CM_BASE_H + 0.5
+    neck -= _loft(outline(WALL), BAY_TOP - 0.01, _rr(10.0, GROOVE_W / 2 - 1.0, 2.0, 0.0, gy1 - GROOVE_W / 2), SHELF_BOT + 0.01)
     # 頭の受け(棚 + 背面の壁 + 側壁はﾍﾞｰｽ部分だけ + 前のﾘｯﾌﾟ)
     shelf_sec = outline()
     shelf = shelf_sec.extrude(SHELF_T).translate((0, 0, SHELF_BOT))
-    shelf -= box(-14.0, -2.0, STACK_Y0 + 1.0, STACK_Y0 + 9.0, SHELF_BOT - 1, SHELF_TOP + 1)   # ｹｰﾌﾞﾙ穴
+    gy1 = STACK_Y0 + c.CM_BASE_H + 0.5            # ﾍﾞｰｽ上端の配線口の高さに、床を横切る溝(貫通させない)
+    shelf -= box(-b.OUT_X - 1, b.OUT_X + 1, gy1 - GROOVE_W, gy1, SHELF_TOP - GROOVE_D, SHELF_TOP + 1)
+    shelf -= box(-10.0, 10.0, gy1 - GROOVE_W + 1.0, gy1 - 1.0, SHELF_BOT - 1, SHELF_TOP + 1)   # 溝の中のｹｰﾌﾞﾙ穴 → 首の中へ
     grip = box(-b.OUT_X + b.BODY_R, b.OUT_X - b.BODY_R, HEAD_DY - b.OUT_Y, STACK_Y0 - b.CLR, SHELF_TOP - 0.01, SHELF_TOP + GRIP_H)
     for sx in (1, -1):
         x_in, x_out = sx * b.IN_X, sx * b.OUT_X
-        grip += box(min(x_in, x_out), max(x_in, x_out), HEAD_DY - b.OUT_Y + b.BODY_R, STACK_Y0 + c.CM_BASE_H - 1.0,
-                    SHELF_TOP - 0.01, SHELF_TOP + GRIP_H)
+        grip += box(min(x_in, x_out), max(x_in, x_out), HEAD_DY - b.OUT_Y + b.BODY_R, STACK_Y0 + c.CM_BASE_H - 10.0,
+                    SHELF_TOP - 0.01, SHELF_TOP + SIDE_H)
     grip += box(-b.IN_X + 7, b.IN_X - 7, STACK_Y1 + b.CLR, HEAD_DY + b.OUT_Y, SHELF_TOP - 0.01, SHELF_TOP + 2.5)
     grip = grip ^ shelf_sec.extrude(GRIP_H + 1).translate((0, 0, SHELF_TOP - 0.5))
+    # つぶしﾘﾌﾞ(受け台 v3 と同じ考え方): 背板 3 本で前へ押し、側壁 2 本ずつで挟む
+    gap = b.CLR * 2
+    for x in (-14.0, 0.0, 14.0):
+        grip += c._rib(x, STACK_Y0 - b.CLR, 0, 1, SHELF_TOP + c.CM_R, SHELF_TOP + GRIP_H, gap + c.RIB_INTERF)
+    for sx in (1, -1):
+        for y in (STACK_Y0 + 4.0, STACK_Y0 + c.CM_BASE_H - 14.0):
+            grip += c._rib(sx * b.IN_X, y, -sx, 0, SHELF_TOP + c.CM_R, SHELF_TOP + SIDE_H, (gap + c.RIB_INTERF) / 2)
     part = skirt + neck + shelf + grip
     part -= d.cyl_x(0.8, -(b.OUT_X + 1), b.OUT_X + 1, HEAD_DY, SCREW_Z, 24)   # M2 下穴
     return part
@@ -114,7 +126,8 @@ def neck_part() -> Manifold:
 @lru_cache(maxsize=None)
 def stack_dummy() -> Manifold:
     sec = c._stack_section(0.0).translate((0, SHELF_TOP))
-    return d._along_y(sec, STACK_Y0, STACK_Y1)
+    # 受け台と同じく、ｽﾀｯｸはﾘﾌﾞで前のﾘｯﾌﾟへ押し付けられた位置に置く
+    return d._along_y(sec, STACK_Y0 + b.CLR, STACK_Y1 + b.CLR)
 
 
 def body_shapes():
@@ -127,7 +140,7 @@ def check():
     shapes = body_shapes()
     # 部品どうし(ﾈｼﾞ止め面以外で重なっていないか)
     for a, bb_ in (("giraffe_bay", "giraffe_neck"), ("giraffe_bay", "fs90r"), ("giraffe_neck", "fs90r"),
-                   ("giraffe_neck", "stack"), ("giraffe_bay", "stack")):
+                   ("giraffe_bay", "stack")):
         v = (shapes[a] ^ shapes[bb_]).volume()
         if v > 0.02:
             hits.append(("body", a, bb_, round(v, 3)))
@@ -160,5 +173,6 @@ if __name__ == "__main__":
         bb = s.bounding_box()
         print(k, [round(bb[i + 3] - bb[i], 1) for i in range(3)], round(s.volume() / 1000, 1), "cm3", s.status(),
               "genus", s.genus())
+    print("rib bite mm3", round((neck_part() ^ stack_dummy()).volume(), 2))
     print("head top z", round(SHELF_TOP + c.CM_W, 1), "stack y", round(STACK_Y0, 1), round(STACK_Y1, 1))
     print(json.dumps(check(), ensure_ascii=False))
