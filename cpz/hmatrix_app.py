@@ -9,8 +9,9 @@ CoreMatrix を CPZ のキーボードで操作する。USB は常駐の hmatrixd
   2 ライブラリ: CPZ に置いた番組 (STUDIO の「CPZに置く」) を CPZ から流す / 本体SDへ送る
   3 本体      : CoreMatrix の中の番組を選んで流す・止める・消す
   4 設定      : 明るさ / 向き / 自動回転 / 振って次 / 省電力 / 箱庭 / 充電 / イベントAP / スマホから開くQR
-  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる。↑前 ↓後 (押している間だけ / 押したら続く を選べる)
-                W/S 前/後ろへ N 歩 SPACE 止まる 1〜7 顔 (7 = 箱庭のキャラ) (ファーム v0.12〜)
+  5 歩く      : Stackchan Strider (CoreMatrix + FS90R) を歩かせる (ファーム v0.12〜)。
+                操作画面: ↑前 ↓後 (押している間だけ / 押したら続く) SPACE 止まる 1〜7 顔 英字キー = プログラム
+                TAB 設定 / P プログラムの編集 (動き [速さ, 秒] の並び + くりかえし + キー)
 右側の 16×16 は、いま CPZ から流している絵
 
 共通: ESC = ホームへ (ホームでは終了確認)  方向キー = F(↑) X(↓) Z(←) C(→)
@@ -38,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.12.3"
+VERSION = "0.13.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -51,6 +52,14 @@ NAMES = {M_SAY: "ことば", M_LIB: "ライブラリ", M_DEV: "本体", M_SET: "
 DESC = {M_SAY: "打った文字をすぐ流す", M_LIB: "CPZに置いた番組", M_DEV: "CoreMatrixの中の番組", M_SET: "向き・省電力・イベントAP",
         M_WALK: "Strider を歩かせる"}
 WALK_FACES = ["おまかせ", "ふつう", "にっこり", "びっくり", "ねむい", "おこ", "キャラ"]   # キャラ = 箱庭のキャラ (ファーム v0.13〜)
+# v0.13 プログラム: [速さ % (+前 / −後), 秒] を順に。キーは英字 (F/X/Z/C は方向、P は編集なので使わない)
+PROG_KEYS = list("QWERTYUIOADGHJKLSVBNM")
+DEFAULT_PROGS = [
+    {"name": "右に回る(仮)", "key": "E", "rep": 3, "steps": [[60, 1.0], [-60, 0.2]]},
+    {"name": "左に回る(仮)", "key": "Q", "rep": 3, "steps": [[-60, 1.0], [60, 0.2]]},
+    {"name": "ちょっと前", "key": "W", "rep": 1, "steps": [[40, 3.0]]},
+    {"name": "ちょっと後ろ", "key": "S", "rep": 1, "steps": [[-40, 3.0]]},
+]
 SERVO_PINS = [-1, 23, 22, 24, 29, 5, 6, 7, 8, 10, 11]   # M5-Bus の GPIO (0/1 は I2C、12/13 は USB なので使わない)
 
 SHOWS = [("scrollL", "横流し"), ("static", "止めて"), ("wave", "波"), ("bounce", "往復"),
@@ -169,13 +178,15 @@ class App:
         self.ap = None               # イベントAP の状態 (GET /api/ap)
         self.walk = {"speed": 0, "set": int(c.get("wspeed", 40)), "face": 0}   # set = ↑↓で出す速さ
         self.walk_i = 0; self.walk_sent = 0.0; self.walk_err = None
-        # v0.12.3: 押している間だけ歩く (hold) / 押したら歩き続ける、と「ちょっと歩く」(W/S で N 歩)
+        # v0.12.3: 押している間だけ歩く (hold) / 押したら歩き続ける
         self.walk_hold = bool(c.get("whold", True))
-        self.walk_steps = int(c.get("wsteps", 5))
-        self.walk_steptime = float(c.get("wsteptime", 0.6))      # 1 歩 (クランク 1 周) にかかる秒。見ながら合わせる
         self.walk_hold_code = None          # 押しっぱなしで歩いている時のキー
-        self.walk_until = 0.0               # ちょっと歩く: この時刻で止める
         self.cur_code = None
+        # v0.13: 操作画面 / 設定 / プログラム一覧 / プログラム編集
+        self.walk_view = "ctl"
+        self.progs = c.get("wprogs") or [dict(p, steps=[list(x) for x in p["steps"]]) for p in DEFAULT_PROGS]
+        self.prog_i = 0; self.prog_run = None; self.del_armed = False
+        self.edit = None; self.edit_row = 0; self.edit_field = 0
         self.msg = None; self.msg_until = 0
         self.confirm_quit = False
         self.dirty = True
@@ -520,7 +531,8 @@ class App:
             self.dirty = True
             fn = {M_HOME: self.k_home, M_SAY: self.k_say, M_LIB: self.k_lib,
                   M_DEV: self.k_dev, M_SET: self.k_set, M_WALK: self.k_walk}[self.mode]
-            if self.mode != M_SAY:
+            typing = self.mode == M_WALK and self.walk_view == "edit" and self.edit_row == 0   # 名前を打っている
+            if self.mode != M_SAY and not typing:
                 kind, val = nav([(kind, val)])[0]
             if fn(kind, val) == "quit":
                 return "quit"
@@ -728,8 +740,8 @@ class App:
         elif key == "stop" and val == "ENTER":
             self.stop()
 
-    # ---- 歩く (v0.11、ファーム v0.12〜)
-    WALK_KEYS = ["speed", "hold", "steps", "steptime", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
+    # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
+    WALK_KEYS = ["speed", "hold", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -738,9 +750,7 @@ class App:
         pin = w.get("pin", -1)
         rows = {"speed": ("↑↓で出す速さ", f"{self.walk['set']}%"),
                 "hold": ("↑↓の操作", "押してる間" if self.walk_hold else "押したら続く"),
-                "steps": ("W/S ちょっと歩く", f"{self.walk_steps}歩"),
-                "steptime": ("1歩の時間", f"{self.walk_steptime:.1f}秒"),
-                "face": ("顔", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
+                "face": ("顔 (操作画面で 1〜7)", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
                 "wchar": ("おまかせの顔", ("箱庭のキャラ" if w.get("wchar") else "スタックチャン") if "wchar" in w else "要v0.13"),
                 "walker": ("歩くロボット", "入 (Grove 5V)" if w.get("walker") else "切"),
                 "servo": ("サーボの GPIO", "なし" if pin < 0 else f"G{pin}"),
@@ -753,41 +763,153 @@ class App:
         return [rows[k] for k in self.WALK_KEYS]
 
     def r_walk(self):
-        img, d = self.frame("歩く", ("↑↓押す間" if self.walk_hold else "↑前↓後") + f" W/S {self.walk_steps}歩 SPC止 TAB ←→ ESC")
-        items = self.walk_items()
-        self.list_draw(d, items, self.walk_i if len(items) > 1 else 0, 178, top=22, row=16)
+        return {"ctl": self.r_walk_ctl, "set": self.r_walk_set, "prog": self.r_walk_prog,
+                "edit": self.r_walk_edit}[self.walk_view]()
+
+    # 操作画面: 操作だけを大きく見せる
+    def r_walk_ctl(self):
+        img, d = self.frame("歩く", "↑↓歩く SPC止 英字キー実行 TAB設定 P編集")
         dv = self.hub.st.get("dev") or {}
         w = dv.get("walk") or {}
-        x0 = 184
         sp = self.walk["speed"]
-        # 進む向き (大きな矢印)
-        cx, cy = 222, 60
-        col = OKC if sp else (90, 94, 108)
-        if sp > 0:
-            d.polygon([(cx, cy - 26), (cx - 22, cy), (cx - 9, cy), (cx - 9, cy + 22), (cx + 9, cy + 22), (cx + 9, cy), (cx + 22, cy)], fill=col)
-        elif sp < 0:
-            d.polygon([(cx, cy + 26), (cx - 22, cy), (cx - 9, cy), (cx - 9, cy - 22), (cx + 9, cy - 22), (cx + 9, cy), (cx + 22, cy)], fill=col)
-        else:
-            d.rectangle((cx - 16, cy - 16, cx + 16, cy + 16), outline=col, width=3)
-        state = "前進" if sp > 0 else "後退" if sp < 0 else "止まっている"
-        if sp and self.walk_until:
-            state += f" 残り{max(0.0, self.walk_until - time.time()):.1f}s"
-        d.text((x0, 92), f"{state} {abs(sp)}%" if sp else state, fill=FG, font=self.font_s)
-        y = 110
-        if w:
-            t = f"向き {w.get('yaw', 0):+.0f}° ({w.get('wz', 0):+.0f}°/s)"
-            d.text((x0, y), self.ellipsize(t, LCD_W - x0 - 3, self.font_t), fill=SUB, font=self.font_t); y += 12
-            if w.get("pin", -1) < 0:
-                d.text((x0, y), "サーボの GPIO を選んで", fill=NGC, font=self.font_t); y += 12
-            elif not w.get("walker"):
-                d.text((x0, y), "歩くロボットを入に", fill=NGC, font=self.font_t); y += 12
+        run = self.prog_run
+        # 左: 十字 (↑ 前 / ↓ 後 / 真ん中 止)
+        cx, cy = 52, 86
+        def arrow(up, on):
+            col = OKC if on else (64, 68, 82)
+            s = -1 if up else 1
+            y0 = cy + s * 18
+            d.polygon([(cx, y0 + s * 30), (cx - 26, y0 + s * 6), (cx - 11, y0 + s * 6), (cx - 11, y0),
+                       (cx + 11, y0), (cx + 11, y0 + s * 6), (cx + 26, y0 + s * 6)], fill=col)
+        arrow(True, sp > 0); arrow(False, sp < 0)
+        d.ellipse((cx - 14, cy - 14, cx + 14, cy + 14), fill=(120, 40, 40) if not sp else (40, 42, 52),
+                  outline=(200, 90, 90) if not sp else (90, 94, 108), width=2)
+        d.text((cx - self.font_t.getlength("止") / 2, cy - 6), "止", fill=FG, font=self.font_t)
+        d.text((cx - 48, 140), ("押してる間" if self.walk_hold else "押したら続く") + f" {self.walk['set']}%",
+               fill=SUB, font=self.font_t)
+        # 真ん中: いまの速さ (本体が実際に出している % = ランプ込み) と向き
+        out = w.get("out", sp) if isinstance(w.get("out"), int) else sp
+        bx0, by0, bx1, by1 = 112, 26, 128, 116
+        d.rectangle((bx0, by0, bx1, by1), outline=(70, 74, 88))
+        mid = (by0 + by1) // 2
+        d.line((bx0 - 3, mid, bx1 + 3, mid), fill=(90, 94, 108))
+        if out:
+            h = int((by1 - by0) / 2 * min(100, abs(out)) / 100)
+            d.rectangle((bx0 + 2, mid - h if out > 0 else mid, bx1 - 2, mid if out > 0 else mid + h),
+                        fill=OKC if out > 0 else ACC)
+        d.text((bx0 - 2, by1 + 2), f"{out:+d}%", fill=FG, font=self.font_t)
+        # 向き (ジャイロ)
+        ccx, ccy, cr = 168, 60, 26
+        d.ellipse((ccx - cr, ccy - cr, ccx + cr, ccy + cr), outline=(70, 74, 88), width=2)
+        yaw = float(w.get("yaw", 0) or 0)
+        a = math.radians(-yaw)
+        d.line((ccx, ccy, ccx + (cr - 5) * math.sin(a), ccy - (cr - 5) * math.cos(a)), fill=ACC, width=3)
+        d.ellipse((ccx - 3, ccy - 3, ccx + 3, ccy + 3), fill=ACC)
+        d.text((ccx - 22, ccy + cr + 3), f"向き {yaw:+.0f}°", fill=SUB, font=self.font_t)
+        state = (run["p"]["name"] if run else "前進" if sp > 0 else "後退" if sp < 0 else "停止中")
+        d.text((140, 112), self.ellipsize(state, 70, self.font_s), fill=FG, font=self.font_s)
         bv = dv.get("batt")
-        if isinstance(bv, int) and bv > 0 and y < 142:
-            d.text((x0, y), f"電池 {dv.get('lvl', '?')}% {bv / 1000:.2f}V", fill=SUB, font=self.font_t)
+        if isinstance(bv, int) and bv > 0:
+            d.text((140, 128), f"電池 {dv.get('lvl', '?')}%", fill=SUB, font=self.font_t)
+        if w.get("pin", -1) < 0 or not w.get("walker"):
+            d.text((140, 140), "TABで設定を", fill=NGC, font=self.font_t)
+        # 右: プログラム (キー + 名前)。動いているものは進み具合
+        x0, y = 212, 22
+        d.text((x0, y), "プログラム", fill=ACC, font=self.font_t); y += 13
+        for i, p in enumerate(self.progs[:8]):
+            on = run is not None and run["i"] == i
+            if on:
+                d.rectangle((x0 - 2, y - 1, LCD_W - 2, y + 13), fill=(44, 33, 12))
+            d.rounded_rectangle((x0, y, x0 + 13, y + 12), 2, fill=(52, 56, 70) if not on else ACC)
+            d.text((x0 + 3, y), p["key"], fill=FG if not on else (20, 20, 20), font=self.font_t)
+            d.text((x0 + 18, y), self.ellipsize(p["name"], LCD_W - x0 - 22, self.font_t), fill=FG, font=self.font_t)
+            y += 15
+            if on:
+                frac = min(1.0, (time.time() - run["t0"]) / max(0.1, run["total"]))
+                d.rectangle((x0, y - 3, x0 + int((LCD_W - 4 - x0) * frac), y - 2), fill=ACC)
         if self.walk_err:
-            d.text((x0, 140), self.ellipsize(self.walk_err, LCD_W - x0 - 3, self.font_t), fill=NGC, font=self.font_t)
+            d.text((4, LCD_H - BOT_H - 13), self.ellipsize(self.walk_err, LCD_W - 8, self.font_t), fill=NGC, font=self.font_t)
         self.toast_draw(img)
         return img
+
+    def r_walk_set(self):
+        img, d = self.frame("歩く: 設定", "↑↓項目 ←→変更 ESC 操作画面へ")
+        items = self.walk_items()
+        self.list_draw(d, items, self.walk_i if len(items) > 1 else 0, LCD_W - 4, top=22, row=16)
+        self.toast_draw(img)
+        return img
+
+    # プログラム一覧
+    def r_walk_prog(self):
+        img, d = self.frame("歩く: プログラム", "↑↓選ぶ ENTER編集 R試す N新規 BS消す ESC")
+        items = [(f"{p['key']}  {p['name']}", self.prog_summary(p)) for p in self.progs] or [("(なし)", "N で作る")]
+        self.list_draw(d, items, min(self.prog_i, len(items) - 1), LCD_W - 4, top=22, row=16)
+        self.toast_draw(img)
+        return img
+
+    def prog_summary(self, p):
+        st = "+".join(f"{'前' if s > 0 else '後' if s < 0 else '止'}{t:.1f}" for s, t in p["steps"])
+        return (st + (f" ×{p['rep']}" if p.get("rep", 1) > 1 else ""))[:22]
+
+    def edit_rows(self):
+        p = self.edit
+        rows = [("名前 (文字を打つ)", p["name"] + ("_" if self.edit_row == 0 else "")),
+                ("キー", p["key"]), ("くりかえし", f"{p['rep']}回")]
+        for k, (s, t) in enumerate(p["steps"]):
+            sel = self.edit_row == 3 + k
+            sv = f"{'前' if s > 0 else '後' if s < 0 else '止'}{abs(s)}%"
+            tv = f"{t:.1f}秒"
+            if sel:
+                sv, tv = (f"[{sv}]", tv) if self.edit_field == 0 else (sv, f"[{tv}]")
+            rows.append((f"{k + 1}. 動き", f"{sv}  {tv}"))
+        rows.append(("▶ 試す", "ENTER"))
+        return rows
+
+    def r_walk_edit(self):
+        r = self.edit_row
+        if r == 0:
+            hint = "文字を打つ BS消す ↑↓移動 ESC保存"
+        elif 3 <= r < 3 + len(self.edit["steps"]):
+            hint = "←→変更 ENTER速さ/時間 +足す -消す ESC保存"
+        else:
+            hint = "↑↓移動 ←→変更 ESC保存して戻る"
+        img, d = self.frame("プログラム編集", hint)
+        self.list_draw(d, self.edit_rows(), r, LCD_W - 4, top=22, row=16)
+        self.toast_draw(img)
+        return img
+
+    # ---- プログラムの保存と実行
+    def save_progs(self):
+        c = load_cfg(); c["wprogs"] = self.progs; save_cfg(c)
+
+    def prog_start(self, i):
+        p = self.progs[i]
+        total = sum(t for _, t in p["steps"]) * max(1, p.get("rep", 1))
+        now = time.time()
+        self.walk_hold_code = None
+        self.prog_run = {"i": i, "p": p, "si": 0, "loop": 0, "t_end": now + p["steps"][0][1], "t0": now, "total": total}
+        self.walk_send(int(p["steps"][0][0]))
+
+    def prog_stop(self, send=True):
+        if self.prog_run is not None:
+            self.prog_run = None
+            if send:
+                self.walk_send(0)
+
+    def prog_tick(self, now):
+        r = self.prog_run
+        if r is None or now < r["t_end"]:
+            return
+        p = r["p"]
+        r["si"] += 1
+        if r["si"] >= len(p["steps"]):
+            r["si"] = 0; r["loop"] += 1
+            if r["loop"] >= max(1, p.get("rep", 1)):
+                self.prog_stop(); self.dirty = True
+                return
+        s, t = p["steps"][r["si"]]
+        r["t_end"] = now + t
+        self.walk_send(int(s)); self.dirty = True
 
     def walk_send(self, speed=None):
         """hub へ速さを頼む (待たない。裏で送る)"""
@@ -806,28 +928,42 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def walk_stop(self):
+        self.prog_stop(send=False)
         if self.walk["speed"] or time.time() - self.walk_sent < 3:
             self.walk_send(0)
 
     def k_walk(self, kind, val):
+        return {"ctl": self.k_walk_ctl, "set": self.k_walk_set, "prog": self.k_walk_prog,
+                "edit": self.k_walk_edit}[self.walk_view](kind, val)
+
+    def k_walk_ctl(self, kind, val):
         if val == "ESC":
             self.walk_stop(); self.mode = M_HOME
             return
         if val in ("UP", "DOWN"):
-            self.walk_until = 0.0
+            self.prog_stop(send=False)
             self.walk_hold_code = self.cur_code if self.walk_hold else None   # 離したら止める (run で見る)
             self.walk_send(self.walk["set"] if val == "UP" else -self.walk["set"]); return
-        if kind == "CHAR" and val in "wWsS":            # ちょっと歩く: N 歩ぶんの時間だけ歩いて止まる
-            self.walk_hold_code = None
-            self.walk_until = time.time() + self.walk_steps * self.walk_steptime
-            self.walk_send(self.walk["set"] if val in "wW" else -self.walk["set"]); return
         if (kind == "CHAR" and val == " ") or val == "BS":
-            self.walk_until = 0.0; self.walk_hold_code = None
+            self.prog_stop(send=False); self.walk_hold_code = None
             self.walk_send(0); return
         if val == "TAB":
-            self.walk_i = (self.walk_i + 1) % len(self.WALK_KEYS); return
+            self.walk_stop(); self.walk_view = "set"; return
+        if kind == "CHAR" and val in "pP":
+            self.walk_stop(); self.walk_view = "prog"; return
         if kind == "CHAR" and val in "1234567":
             self.walk["face"] = int(val) - 1; self.walk_send(); return
+        if kind == "CHAR":
+            for i, p in enumerate(self.progs):
+                if p["key"].lower() == val.lower():
+                    self.prog_start(i); return
+
+    def k_walk_set(self, kind, val):
+        if val == "ESC":
+            self.walk_view = "ctl"; return
+        if val in ("UP", "DOWN", "TAB"):
+            n = len(self.WALK_KEYS)
+            self.walk_i = (self.walk_i + (-1 if val == "UP" else 1)) % n; return
         key = self.WALK_KEYS[self.walk_i]
         w = (self.hub.st.get("dev") or {}).get("walk") or {}
         if val not in ("LEFT", "RIGHT", "ENTER"):
@@ -838,17 +974,9 @@ class App:
         if key == "hold":
             self.walk_hold = not self.walk_hold
             c = load_cfg(); c["whold"] = self.walk_hold; save_cfg(c)
-        elif key == "steps":
-            self.walk_steps = max(1, min(20, self.walk_steps + step))
-            c = load_cfg(); c["wsteps"] = self.walk_steps; save_cfg(c)
-        elif key == "steptime":
-            self.walk_steptime = round(max(0.2, min(3.0, self.walk_steptime + step * 0.1)), 1)
-            c = load_cfg(); c["wsteptime"] = self.walk_steptime; save_cfg(c)
         elif key == "speed":
             self.walk["set"] = max(10, min(100, self.walk["set"] + step * 5))
             c = load_cfg(); c["wspeed"] = self.walk["set"]; save_cfg(c)
-            if self.walk["speed"]:
-                self.walk_send(self.walk["set"] if self.walk["speed"] > 0 else -self.walk["set"])
         elif key == "face":
             self.walk["face"] = (self.walk["face"] + step) % len(WALK_FACES); self.walk_send()
         elif key == "wchar":
@@ -872,6 +1000,82 @@ class App:
             cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})
         elif key == "yawzero":
             cfgcall({"yawzero": True}, "向きを 0 にしました")
+
+    def k_walk_prog(self, kind, val):
+        n = len(self.progs)
+        if val == "ESC":
+            self.prog_stop(); self.walk_view = "ctl"; return
+        if val in ("UP", "DOWN") and n:
+            self.prog_i = (self.prog_i + (-1 if val == "UP" else 1)) % n; self.del_armed = False; return
+        if kind == "CHAR" and val in "nN":
+            used = {p["key"] for p in self.progs}
+            free = [k for k in PROG_KEYS if k not in used]
+            if not free:
+                self.toast("キーが空いていません", 3, ok=False); return
+            self.progs.append({"name": "", "key": free[0], "rep": 1, "steps": [[40, 1.0]]})
+            self.save_progs(); self.prog_i = n
+            self.edit_open(); return
+        if not n:
+            return
+        if val == "ENTER":
+            self.edit_open(); return
+        if kind == "CHAR" and val in "rR":
+            self.prog_start(self.prog_i); return
+        if val == "BS":
+            if not self.del_armed:
+                self.del_armed = True; self.toast("もう一度 BS で消します", 3); return
+            self.progs.pop(self.prog_i); self.save_progs()
+            self.prog_i = max(0, min(self.prog_i, len(self.progs) - 1)); self.del_armed = False
+            self.toast("消しました", 2)
+
+    def edit_open(self):
+        p = self.progs[self.prog_i]
+        self.edit = {"name": p["name"], "key": p["key"], "rep": p.get("rep", 1), "steps": [list(s) for s in p["steps"]]}
+        self.edit_row = 0; self.edit_field = 0
+        self.walk_view = "edit"
+
+    def edit_commit(self):
+        self.progs[self.prog_i] = {"name": self.edit["name"] or f"prog{self.prog_i + 1}", "key": self.edit["key"],
+                                   "rep": self.edit["rep"], "steps": [list(s) for s in self.edit["steps"]]}
+        self.save_progs()
+
+    def k_walk_edit(self, kind, val):
+        e = self.edit
+        nrow = 3 + len(e["steps"]) + 1
+        r = self.edit_row
+        if val == "ESC":
+            self.prog_stop(); self.edit_commit(); self.walk_view = "prog"; return
+        if val in ("UP", "DOWN", "TAB"):
+            self.edit_row = (r + (-1 if val == "UP" else 1)) % nrow; self.edit_field = 0; return
+        step = -1 if val == "LEFT" else 1 if val == "RIGHT" else 0
+        if r == 0:                                        # 名前: 文字を打つ
+            if kind == "CHAR" and len(e["name"]) < 16:
+                e["name"] += val
+            elif val == "BS":
+                e["name"] = e["name"][:-1]
+            return
+        if r == 1 and step:                               # キー: ほかのプログラムが使っていないものだけ
+            used = {p["key"] for i, p in enumerate(self.progs) if i != self.prog_i}
+            free = [k for k in PROG_KEYS if k not in used]
+            i = free.index(e["key"]) if e["key"] in free else 0
+            e["key"] = free[(i + step) % len(free)]; return
+        if r == 2 and step:
+            e["rep"] = max(1, min(20, e["rep"] + step)); return
+        if 3 <= r < 3 + len(e["steps"]):
+            k = r - 3
+            if val == "ENTER":
+                self.edit_field ^= 1; return
+            if kind == "CHAR" and val == "+":
+                e["steps"].insert(k + 1, list(e["steps"][k])); self.edit_row += 1; return
+            if kind == "CHAR" and val == "-" and len(e["steps"]) > 1:
+                e["steps"].pop(k); self.edit_row = min(self.edit_row, 3 + len(e["steps"]) - 1); return
+            if step and self.edit_field == 0:
+                e["steps"][k][0] = max(-100, min(100, int(e["steps"][k][0]) + step * 10))
+            elif step:
+                e["steps"][k][1] = round(max(0.1, min(10.0, e["steps"][k][1] + step * 0.1)), 1)
+            return
+        if r == nrow - 1 and val == "ENTER":             # 試す (保存してから)
+            self.edit_commit(); self.prog_start(self.prog_i)
 
     # ---- 結果を受け取る
     def drain(self):
@@ -899,16 +1103,16 @@ class App:
             now = time.time()
             if self.mode == M_SAY and now - last > 0.5:
                 self.dirty = True                      # カーソルの点滅
+            if self.mode == M_WALK:
+                self.prog_tick(now)                    # プログラム: 次の動きへ
+                if self.prog_run is not None:
+                    self.dirty = True                  # 進み具合のバー
             if self.mode == M_WALK and self.walk["speed"]:
                 held = getattr(self.keys, "held", None)
                 if self.walk_hold_code is not None and held is not None and self.walk_hold_code not in held:
                     self.walk_hold_code = None; self.walk_send(0); self.dirty = True     # 離した → 止まる
-                elif self.walk_until and now >= self.walk_until:
-                    self.walk_until = 0.0; self.walk_send(0); self.dirty = True          # ちょっと歩く: 時間が来た
                 elif now - self.walk_sent > 0.5:
                     self.walk_send()                   # 頼み直し (hub は 1.5 秒来ないと止める)
-                if self.walk_until:
-                    self.dirty = True
             if self.msg and now > self.msg_until and self.msg_until:
                 self.msg_until = 0; self.dirty = True
             if self.dirty and now - last > 0.08:
