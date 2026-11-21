@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.13.2"
+VERSION = "0.13.3"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -840,6 +840,7 @@ class Hub:
     WALK_KEYS = ("walker", "servo", "strim", "sinv", "wmax", "yawzero", "strimtest", "wchar")
     PLED_KEYS = ("pled",)          # v0.13.2: 緑の電源 LED
     RAMP_KEYS = ("wacc", "wdec")   # v0.13.3: 歩行の加速・減速 (ms)
+    PULSE_KEYS = ("won", "woff")   # v0.13.4: 刻んで歩く (ms)
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
@@ -854,6 +855,8 @@ class Hub:
             raise RuntimeError("本体のファームを v0.13.2 以上にしてください (電源 LED)")
         if any(k in opt for k in self.RAMP_KEYS) and not self.link.fw_at_least(0, 13, 3):
             raise RuntimeError("本体のファームを v0.13.3 以上にしてください (加速・減速)")
+        if any(k in opt for k in self.PULSE_KEYS) and not self.link.fw_at_least(0, 13, 4):
+            raise RuntimeError("本体のファームを v0.13.4 以上にしてください (刻んで歩く)")
         def val(k, v):
             if k == "hako":
                 return v if v in ("auto", "on", "off") else ("on" if v is True else "off" if v is False else "auto")
@@ -862,7 +865,7 @@ class Hub:
             if isinstance(v, (int, float)):
                 return str(int(v))
             raise ValueError(f"{k} の値が変です")
-        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS if k in opt]
+        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS + self.PULSE_KEYS if k in opt]
         if not items:
             raise ValueError("設定がありません")
         return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)

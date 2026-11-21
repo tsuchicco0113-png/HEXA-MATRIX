@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.0"
+VERSION = "0.13.1"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -741,7 +741,8 @@ class App:
             self.stop()
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
-    WALK_KEYS = ["speed", "hold", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax", "wdec", "wacc", "yawzero"]
+    WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
+                 "wdec", "wacc", "yawzero"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -750,6 +751,9 @@ class App:
         pin = w.get("pin", -1)
         rows = {"speed": ("↑↓で出す速さ", f"{self.walk['set']}%"),
                 "hold": ("↑↓の操作", "押してる間" if self.walk_hold else "押したら続く"),
+                "gait": ("歩き方", ("刻む" if w.get("pon") and w.get("poff") else "なめらか") if "pon" in w else "要v0.13.4"),
+                "won": ("刻む: 動く時間", f"{w['pon'] / 1000:.1f}秒" if "pon" in w else "-"),
+                "woff": ("刻む: 休む時間", f"{w['poff'] / 1000:.1f}秒" if "poff" in w else "-"),
                 "face": ("顔 (操作画面で 1〜7)", WALK_FACES[self.walk["face"] % len(WALK_FACES)]),
                 "wchar": ("おまかせの顔", ("箱庭のキャラ" if w.get("wchar") else "スタックチャン") if "wchar" in w else "要v0.13"),
                 "walker": ("歩くロボット", "入 (Grove 5V)" if w.get("walker") else "切"),
@@ -995,6 +999,16 @@ class App:
             cfgcall({"sinv": not w.get("inv")}, "前後を入れ替えました")
         elif key == "wmax":
             cfgcall({"wmax": max(10, min(100, int(w.get("max", 60)) + step * 10))})
+        elif key == "gait" and "pon" in w:                # v0.13.4: なめらか ⇔ 刻む (ボタン連打と同じ動き)
+            if w.get("pon") and w.get("poff"):
+                c = load_cfg(); c["wpulse"] = [w["pon"], w["poff"]]; save_cfg(c)
+                cfgcall({"won": 0, "woff": 0}, "なめらかに続けて歩きます")
+            else:
+                on, off = (load_cfg().get("wpulse") or [500, 300])
+                cfgcall({"won": on, "woff": off}, f"刻んで歩きます (動く {on / 1000:.1f}秒・休む {off / 1000:.1f}秒)")
+        elif key in ("won", "woff") and "pon" in w:
+            cur = int(w.get("pon" if key == "won" else "poff", 0))
+            cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})
         elif key in ("wdec", "wacc") and (key[1:] in w):     # v0.13.3: 0.1 秒きざみ (0〜3 秒)
             cur = int(w.get(key[1:], 0))
             cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})

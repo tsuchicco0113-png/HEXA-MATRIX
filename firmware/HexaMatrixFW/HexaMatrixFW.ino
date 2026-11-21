@@ -94,6 +94,7 @@
 //   v0.13.1: STUDIO で箱庭のキャラを保存し直したら、歩行中のキャラもそのキャラに替わる (以前は再起動まで前のまま)
 //   v0.13.2: 緑の電源 LED (M5PM1 LED_EN) を消せる設定 pled (CONFIG pled=0)。M5Unified は起動のたびに点けるので起動後に毎回反映
 //   v0.13.3: 歩行の加速・減速をゆっくりに (wacc / wdec ms)。前寄りの重心で、止まる時の慣性で前に倒れるのを防ぐ
+//   v0.13.4: 刻んで歩く (won / woff ms)。続けて回すと曲がる個体で、ボタン連打と同じ「動く→休む」をくり返す
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -116,7 +117,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.3";
+static const char* FW_VER = "0.13.4";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -349,10 +350,10 @@ static void sendStatus() {
   // v0.12: 歩行
   out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
-              "\"acc\":%u,\"dec\":%u,\"out\":%d}}\n",
+              "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
-              wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out));
+              wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -901,6 +902,8 @@ static void loadWalkCfg() {
   wcfg.maxPct = prefs.getUChar("wmax", 60);
   wcfg.accMs  = prefs.getUShort("wacc", 300);
   wcfg.decMs  = prefs.getUShort("wdec", 900);
+  wcfg.pulseOn  = prefs.getUShort("won", 0);
+  wcfg.pulseOff = prefs.getUShort("woff", 0);
   cfgWalkChar = prefs.getBool("wch", false);
 }
 
@@ -1015,6 +1018,8 @@ static void handleConfig() {
       else if (!strcmp(k, "sinv")) { wcfg.inv = on; prefs.putBool("winv", on); }
       else if (!strcmp(k, "wmax")) { int n = atoi(v); wcfg.maxPct = (uint8_t)(n < 10 ? 10 : n > 100 ? 100 : n); prefs.putUChar("wmax", wcfg.maxPct); }
       else if (!strcmp(k, "wacc")) { int n = atoi(v); wcfg.accMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wacc", wcfg.accMs); }
+      else if (!strcmp(k, "won"))  { int n = atoi(v); wcfg.pulseOn  = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("won", wcfg.pulseOn); }
+      else if (!strcmp(k, "woff")) { int n = atoi(v); wcfg.pulseOff = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("woff", wcfg.pulseOff); }
       else if (!strcmp(k, "wdec")) { int n = atoi(v); wcfg.decMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wdec", wcfg.decMs); }
       else if (!strcmp(k, "yawzero")) { if (on) yawDeg = 0.f; evOnly = true; }
       else if (!strcmp(k, "wchar")) { cfgWalkChar = on; prefs.putBool("wch", on); }

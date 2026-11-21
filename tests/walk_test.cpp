@@ -48,6 +48,22 @@ int main() {
     c2.decMs = 0; v.command(0, 5, 0xFF, 30000); assert(v.ramp(30010, c2) == 0);   // dec 0 = すぐ止まる
     puts("ramp ok");
   }
+  {   // v0.13.4: 刻んで歩く (動く 400ms → 休む 300ms)
+    HxmWalkCfg c3; c3.accMs = 0; c3.decMs = 0; c3.pulseOn = 400; c3.pulseOff = 300;
+    HxmWalk v;
+    v.command(50, 50, 0, 1000); v.rampAt = 1000;
+    assert(v.ramp(1100, c3) == 50);
+    assert(v.ramp(1399, c3) == 50);
+    assert(v.ramp(1400, c3) == 0);      // 休む
+    assert(v.ramp(1699, c3) == 0);
+    assert(v.ramp(1700, c3) == 50);     // また動く
+    v.command(50, 50, 0, 1750);          // 同じ向きの頼み直しでは位相を戻さない
+    assert(v.ramp(2100, c3) == 0);
+    v.command(-50, 50, 0, 2150);         // 向きを変えたら頭から
+    assert(v.ramp(2200, c3) == -50);
+    c3.pulseOff = 0; assert(v.ramp(2600, c3) == -50);   // 片方 0 なら刻まない
+    puts("pulse ok");
+  }
   uint16_t r[16];
   for (int f = 1; f < HXW_FACE_N; f++) { hxm_walk_face(r, f, f == 2 ? 1 : f == 3 ? -1 : 0, 500); show(r); }
   puts("walk ok");

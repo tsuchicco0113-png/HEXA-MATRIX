@@ -24,6 +24,8 @@ struct HxmWalkCfg {
   uint16_t span = 400;   // 100% のときの中立からの µs (dead を含まない)
   uint16_t accMs = 300;  // v0.13.3: 0 → 100% にかける時間 (動き出しのつんのめり防止)
   uint16_t decMs = 900;  // v0.13.3: 100% → 0 にかける時間 (止まる時の慣性で前に倒れないように)
+  uint16_t pulseOn = 0;  // v0.13.4: 刻んで歩く。動く時間 ms (0 = なめらかに続けて歩く)
+  uint16_t pulseOff = 0; //          休む時間 ms (続けて回すと曲がる個体向け。ボタン連打と同じ動き)
 };
 
 /// 速さ % → パルス幅 µs。0 は中立
@@ -67,6 +69,7 @@ struct HxmWalk {
   uint32_t cmds = 0, timeouts = 0;
   float    out = 0.f;          // v0.13.3: 実際にサーボへ出している速さ % (指令へ向けてゆっくり寄せる)
   uint32_t rampAt = 0;
+  uint32_t moveAt = 0;         // v0.13.4: 動き始めた時刻 / 向きを変えた時刻 (刻みの位相の基準)
 
   /// 出す速さを指令へ寄せる。速くする時は accMs、遅くする・止める・逆へ回す時は decMs で 100% 分動く
   int ramp(uint32_t now, const HxmWalkCfg& c) {
@@ -75,6 +78,10 @@ struct HxmWalk {
     if (dt > 200.f) dt = 200.f;
     int lim = c.maxPct > 100 ? 100 : c.maxPct;
     float tgt = moving ? (float)(spd > lim ? lim : spd < -lim ? -lim : spd) : 0.f;
+    if (moving && c.pulseOn && c.pulseOff) {               // 刻む: 動く → 休む をくり返す
+      uint32_t ph = (uint32_t)(now - moveAt) % ((uint32_t)c.pulseOn + c.pulseOff);
+      if (ph >= c.pulseOn) tgt = 0.f;
+    }
     if (out == tgt) return (int)out;
     bool speedUp = (tgt > 0 && out >= 0 && tgt > out) || (tgt < 0 && out <= 0 && tgt < out);
     uint16_t ms = speedUp ? c.accMs : c.decMs;
@@ -94,6 +101,7 @@ struct HxmWalk {
     if (f != 0xFF) face = f;
     until = now + (uint32_t)(ttl ? ttl : 5) * 100u;
     bool was = moving;
+    if (s != 0 && (!was || (s > 0) != (spd > 0))) moveAt = now;   // 動き始め・向きを変えた時から刻みを数える
     spd = s; moving = s != 0;
     if (moving) pulsing = true;
     else if (was) stopAt = now;
