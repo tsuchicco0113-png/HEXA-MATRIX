@@ -5,7 +5,7 @@
   - 音: ~/.config/hexa-matrix/sounds/<名前>.wav (または .mp3) があれば CPZ のスピーカーで鳴らす。
         音のファイルはリポジトリに入れない (各自で置く)。wav は aplay、mp3 は mpg123 / ffplay があれば使う
 
-名前: hadou (気弾)、shoryu (突き上げ)。音のファイル名も同じ (hadou.wav / shoryu.wav)
+名前: hadou (気弾)、shoryu (突き上げ)、tatsumaki (うず)。音のファイル名も同じ (hadou.wav / shoryu.wav / tatsumaki.wav)
 """
 import math
 import os
@@ -130,9 +130,24 @@ def _shoryu():
     return fr
 
 
+def _tatsumaki():
+    """竜巻: 弧 (蹴りの軌跡) が回りながら広がる → HIT"""
+    fr = []
+    for r, rot in ((3, 0.0), (4.5, 1.2), (6, 2.4), (7, 3.6), (7.5, 4.8)):
+        g = Grid()
+        for ring, rr, span, off in ((0, r, 2.4, 0.0), (1, r * 0.55, 1.8, math.pi)):
+            for t in range(24):                         # 外と内の 2 本の弧 (向きを逆に)
+                a = rot * (1 if ring == 0 else -1.3) + off + span * t / 23
+                g.dot(7.5 + rr * math.cos(a), 7.5 + rr * math.sin(a) * 0.75)
+        fr.append(g)
+    fr.append(_hit())
+    return fr
+
+
 # name: (表示名, コマ, 1コマの ms, 最後のコマを残す ms)
 EFFECTS = {"hadou": ("波動拳", _hadou(), 70, 700),
-           "shoryu": ("昇竜拳", _shoryu(), 70, 700)}
+           "shoryu": ("昇竜拳", _shoryu(), 70, 700),
+           "tatsumaki": ("竜巻旋風脚", _tatsumaki(), 90, 700)}
 
 
 def fx_payload(name):

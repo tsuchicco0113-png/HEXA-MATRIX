@@ -968,7 +968,7 @@ class App:
             v = "押して…" if learning == a["id"] else (f"ボタン {mp[a['id']]}" if a["id"] in mp else "-")
             items.append((label, v))
         if "cmd" in pd:                                  # ハブ v0.14.0: コマンド入力 (最後の行)
-            items.append(("コマンド技 236波動/623昇竜", "入" if pd.get("cmd") else "切"))
+            items.append(("コマンド技 236/623/214", "入" if pd.get("cmd") else "切"))
         if items:
             self.list_draw(d, items, min(self.pad_i, len(items) - 1), LCD_W - 4, top=36, row=15)
         d.text((4, LCD_H - BOT_H - 13), self.ellipsize("レバー: 上下=前後 左右=その場旋回 (覚えさせ不要)", LCD_W - 8, self.font_t),
@@ -994,7 +994,7 @@ class App:
             if val in ("ENTER", "LEFT", "RIGHT"):
                 on = not pd.get("cmd")
                 self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/cmd", {"on": on}),
-                         lambda r: self.toast("レバー↓↘→+ボタン=波動拳 / →↓↘+ボタン=昇竜拳" if on else "コマンド技を切りました", 4))
+                         lambda r: self.toast("↓↘→+ボタン=波動拳 / →↓↘=昇竜拳 / ↓↙←=竜巻旋風脚" if on else "コマンド技を切りました", 4))
             return
         if val == "ENTER":
             if not pd.get("connected"):
@@ -1099,7 +1099,7 @@ class App:
             if val.lower() in self.FX_KEYS:               # v0.13.9: Z 波動 / X 昇竜 (プログラムに同じキーがあればそちら)
                 self.fx_play(self.FX_KEYS[val.lower()]); return
 
-    FX_KEYS = {"z": "hadou", "x": "shoryu"}
+    FX_KEYS = {"z": "hadou", "x": "shoryu", "c": "tatsumaki"}
 
     def fx_play(self, name):
         if self.hub.st.get("fx") is None:
