@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.6"
+VERSION = "0.13.7"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -184,6 +184,7 @@ class App:
         self.cur_code = None
         # v0.13: 操作画面 / 設定 / プログラム一覧 / プログラム編集
         self.walk_view = "ctl"
+        self.pad_i = 0
         self.scan_half = int(c.get("wscanhalf", 250))
         self.progs = c.get("wprogs") or [dict(p, steps=[list(x) for x in p["steps"]]) for p in DEFAULT_PROGS]
         for p in self.progs:                 # v0.13.2: 仮の旋回 (前 1.0 + 後 0.2) を本当の旋回に置き換える
@@ -746,7 +747,7 @@ class App:
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
     WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
-                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "toff", "tscan", "tres1", "tres2"]
+                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "toff", "tscan", "tres1", "tres2", "pad"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -775,9 +776,16 @@ class App:
                 "toff": ("左右の当たりの距離", (f"{w['toff']}ms (ENTERで消す)" if w.get("toff", -9999) > -9999 else "まだ")
                          if "toff" in w else "要v0.13.9"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),
+                "pad": ("アケコン (ENTERで設定)", self.pad_label()),
                 "tres1": ("結果 1〜4 (°、+は左回り)", self.scan_res(w, 0)),
                 "tres2": ("結果 5〜8", self.scan_res(w, 4))}
         return [rows[k] for k in self.WALK_KEYS]
+
+    def pad_label(self):
+        pd = self.hub.st.get("pad")
+        if pd is None:
+            return "要ハブ v0.13.7"
+        return (pd.get("name") or "つながっている")[:14] if pd.get("connected") else "未接続"
 
     def scan_label(self, w):
         sc = w.get("scan")
@@ -797,7 +805,7 @@ class App:
 
     def r_walk(self):
         return {"ctl": self.r_walk_ctl, "set": self.r_walk_set, "prog": self.r_walk_prog,
-                "edit": self.r_walk_edit}[self.walk_view]()
+                "edit": self.r_walk_edit, "pad": self.r_walk_pad}[self.walk_view]()
 
     # 操作画面: 操作だけを大きく見せる
     def r_walk_ctl(self):
@@ -925,6 +933,50 @@ class App:
         self.toast_draw(img)
         return img
 
+    # ---- アケコン (hub v0.13.7〜): ボタンを押して覚えさせる
+    def r_walk_pad(self):
+        pd = self.hub.st.get("pad") or {}
+        learning = pd.get("learn")
+        img, d = self.frame("アケコン", "ENTERで覚える→アケコンのボタンを押す BS消す ESC")
+        head = (pd.get("name") or "未接続") + (f"  レバー:{'十字' if pd.get('lever') == 'hat' else 'スティック'}" if pd.get("lever") else "")
+        d.text((4, 20), self.ellipsize(head, LCD_W - 8, self.font_t), fill=OKC if pd.get("connected") else NGC, font=self.font_t)
+        mp = pd.get("map") or {}
+        progs = self.progs
+        items = []
+        for k, a in enumerate(pd.get("actions") or []):
+            label = a["label"]
+            if a["id"].startswith("prog"):
+                i = int(a["id"][4:]) - 1
+                label += f" ({progs[i]['name']})" if i < len(progs) else " (なし)"
+            v = "押して…" if learning == a["id"] else (f"ボタン {mp[a['id']]}" if a["id"] in mp else "-")
+            items.append((label, v))
+        if items:
+            self.list_draw(d, items, min(self.pad_i, len(items) - 1), LCD_W - 4, top=36, row=15)
+        d.text((4, LCD_H - BOT_H - 13), self.ellipsize("レバー: 上下=前後 左右=その場旋回 (覚えさせ不要)", LCD_W - 8, self.font_t),
+               fill=SUB, font=self.font_t)
+        self.toast_draw(img)
+        return img
+
+    def k_walk_pad(self, kind, val):
+        pd = self.hub.st.get("pad") or {}
+        acts = [a["id"] for a in (pd.get("actions") or [])]
+        if val == "ESC":
+            if pd.get("learn"):
+                self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/learn", {"action": None}))
+            self.walk_view = "set"; return
+        if not acts:
+            return
+        if val in ("UP", "DOWN", "TAB"):
+            self.pad_i = (self.pad_i + (-1 if val == "UP" else 1)) % len(acts); return
+        a = acts[self.pad_i % len(acts)]
+        if val == "ENTER":
+            if not pd.get("connected"):
+                self.toast("アケコンが見つかりません (CPZ に USB で挿す)", 3, ok=False); return
+            self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/learn", {"action": a}),
+                     lambda r: self.toast("アケコンのボタンを押してください", 3))
+        elif val == "BS":
+            self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/clear", {"action": a}))
+
     # ---- プログラムの保存と実行
     def save_progs(self):
         c = load_cfg(); c["wprogs"] = self.progs; save_cfg(c)
@@ -990,7 +1042,7 @@ class App:
 
     def k_walk(self, kind, val):
         return {"ctl": self.k_walk_ctl, "set": self.k_walk_set, "prog": self.k_walk_prog,
-                "edit": self.k_walk_edit}[self.walk_view](kind, val)
+                "edit": self.k_walk_edit, "pad": self.k_walk_pad}[self.walk_view](kind, val)
 
     def k_walk_ctl(self, kind, val):
         if val == "ESC":
@@ -1077,6 +1129,11 @@ class App:
             cfgcall({"wheadth": max(3, min(60, int(w.get("hth", 10)) + step * (5 if int(w.get("hth", 10)) >= 10 else 1)))})
         elif key == "thalf" and "thalf" in w:
             cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 350)) + step * 50))})
+        elif key == "pad" and val == "ENTER":
+            if self.hub.st.get("pad") is None:
+                self.toast("ハブを v0.13.7 以上にしてください", 3, ok=False)
+            else:
+                self.pad_i = 0; self.walk_view = "pad"
         elif key == "toff" and "toff" in w and val == "ENTER":   # v0.13.9: 覚えた左右の距離を消す (組み直した時)
             cfgcall({"toffclr": True}, "左右の当たりの距離を消しました (次の旋回で覚え直します)")
         elif key == "tscan" and "scan" in w:             # v0.13.5: 旋回スキャン
