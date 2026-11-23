@@ -126,7 +126,7 @@ class Pad:
             return {"connected": self.fd is not None, "name": self.name, "lever": self.lever_kind,
                     "map": dict(self.map), "learn": self.learn, "speed": self.speed, "face": self.face,
                     "last": self.last_btn, "running": (self.prog or {}).get("name"), "err": self.err,
-                    "cmd": self.cmd, "cmd_last": self.cmd_last,
+                    "cmd": self.cmd, "cmd_last": self.cmd_last, "spin": self.spin_sec(),
                     "actions": [{"id": a, "label": l} for a, l in ACTIONS]}
 
     def set_learn(self, action):
@@ -134,6 +134,18 @@ class Pad:
             if action is not None and action not in dict(ACTIONS):
                 raise RuntimeError("その動きはありません")
             self.learn = action
+        return self.status()
+
+    def spin_sec(self):
+        try:
+            return max(0.0, min(5.0, float(self.cfg.get("spin", SPIN_SEC))))
+        except (TypeError, ValueError):
+            return SPIN_SEC
+
+    def set_spin(self, sec):
+        with self.lock:
+            self.cfg["spin"] = round(max(0.0, min(5.0, float(sec))) * 2) / 2   # 0〜5 秒、0.5 秒きざみ
+            self._save()
         return self.status()
 
     def set_cmd(self, on):
@@ -239,7 +251,7 @@ class Pad:
             if name:
                 self.cmd_last = name
                 self.hist = []; self.pend = None; self.cmd_lock = True; self.prog = None; self.spin_until = 0.0
-                spin = float(self.cfg.get("spin", SPIN_SEC) or 0)
+                spin = self.spin_sec()
                 if name == "tatsumaki" and spin > 0:
                     self.spin_until = now + spin
                     self._go(0, -1)                 # 右回り (旋回は + が左)

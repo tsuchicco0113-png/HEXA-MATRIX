@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.14.1"
+VERSION = "0.14.2"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -988,6 +988,9 @@ class App:
             items.append((label, v))
         if "cmd" in pd:                                  # ハブ v0.14.0: コマンド入力 (最後の行)
             items.append(("コマンド技 236/623/214", "入" if pd.get("cmd") else "切"))
+        if "spin" in pd:                                 # ハブ v0.14.2: 竜巻旋風脚で回る時間 (←→)
+            sp = float(pd.get("spin") or 0)
+            items.append(("竜巻で右に回る (←→)", f"{sp:.1f}秒" if sp > 0 else "回らない"))
         if items:
             self.list_draw(d, items, min(self.pad_i, len(items) - 1), LCD_W - 4, top=36, row=15)
         d.text((4, LCD_H - BOT_H - 13), self.ellipsize("レバー: 上下=前後 左右=その場旋回 (覚えさせ不要)", LCD_W - 8, self.font_t),
@@ -1006,9 +1009,17 @@ class App:
             return
         if "cmd" in pd:
             acts = acts + ["_cmd"]
+        if "spin" in pd:
+            acts = acts + ["_spin"]
         if val in ("UP", "DOWN", "TAB"):
             self.pad_i = (self.pad_i + (-1 if val == "UP" else 1)) % len(acts); return
         a = acts[self.pad_i % len(acts)]
+        if a == "_spin":
+            if val in ("LEFT", "RIGHT"):
+                sec = max(0.0, min(5.0, float(pd.get("spin") or 0) + (0.5 if val == "RIGHT" else -0.5)))
+                pd["spin"] = sec                                   # 画面はすぐ変える (ハブの返事を待たない)
+                self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/spin", {"sec": sec}))
+            return
         if a == "_cmd":
             if val in ("ENTER", "LEFT", "RIGHT"):
                 on = not pd.get("cmd")

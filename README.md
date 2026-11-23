@@ -310,7 +310,7 @@ Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 ## エフェクト: 波動拳・昇竜拳 (ファーム v0.14.1、ハブ v0.13.9、CPZ アプリ v0.13.9)
 ボタン 1 つで CPZ のスピーカーから音を鳴らし、CoreMatrix に「飛んで当たって HIT!」の 16x16 アニメを一瞬重ねる。
 歩く・旋回は止めない (顔の上に重ねて、終わったら顔に戻る)。
-- 竜巻旋風脚 (214) はその場で右に 2 秒回る (回っている間はレバーを見ない)。秒数は `~/.config/hexa-matrix/pad.json` の `"spin"` (0 で回らない)
+- 竜巻旋風脚 (214) はその場で右に 2 秒回る (回っている間はレバーを見ない)。秒数はアケコン画面の一番下「竜巻で右に回る」を ←→ で 0〜5 秒 (0.5 秒きざみ、0 で回らない)。API `POST /api/pad/spin {"sec":2}`
 - 技はアケコンのコマンド入力で出す (ボタン割り当て・CPZ のキーは v0.14.1 でやめた)。PC などからは `POST /api/fx`
 - 音: `~/.config/hexa-matrix/sounds/hadou.wav` と `shoryu.wav`、`tatsumaki.wav`。CPZ は PipeWire がスピーカーを掴んでいるので pw-play (無ければ paplay → aplay) で鳴らす。`HMATRIX_SOUND_CMD` で鳴らし方を変えられる。**音のファイルはリポジトリに入れない**ので各自で置く。無ければ絵だけ出る
 - 絵は `cpz/hmatrix_fx.py` で点を打って作っている (`python3 cpz/hmatrix_fx.py` で文字の絵が見られる)。足すのは `EFFECTS` に 1 行
