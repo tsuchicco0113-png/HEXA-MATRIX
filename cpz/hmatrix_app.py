@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.14.0"
+VERSION = "0.14.1"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -613,10 +613,21 @@ class App:
                  lambda r: self.toast(f"流しています ({how})" + ("  ※まとめて送れず1コマずつ" if r.get("mode") == "stream" else ""),
                                       4 if r.get("mode") == "stream" else 2.5, ok=r.get("mode") != "stream"))
 
+    def say_body(self):
+        s = self.say
+        size, bold, _ = FONTS[s["font"]]
+        dur = DURS[s["dur"]][0]
+        return {"text": s["text"], "show": SHOWS[s["show"]][0], "eff": EFFS[s["eff"]][0],
+                "speed": s["speed"], "bri": s["bri"], "size": size, "bold": bold,
+                "loop": dur != -1, "dur": max(0, dur)}
+
     def save(self):
         s = self.say
-        save_cfg({"text": s["text"], "show": s["show"], "speed": s["speed"], "bri": s["bri"],
-                  "eff": s["eff"], "font": s["font"], "dur": s["dur"]})
+        c = load_cfg()                                        # v0.14.1: 他の設定 (プログラムなど) を消さないよう足して保存
+        c.update({"text": s["text"], "show": s["show"], "speed": s["speed"], "bri": s["bri"],
+                  "eff": s["eff"], "font": s["font"], "dur": s["dur"],
+                  "say_body": self.say_body()})             # アケコンの「ことば 流す」はこれを使う
+        save_cfg(c)
 
     def refresh_lib(self):
         def done(r):
@@ -965,6 +976,14 @@ class App:
             if a["id"].startswith("prog"):
                 i = int(a["id"][4:]) - 1
                 label += f" ({progs[i]['name']})" if i < len(progs) else " (なし)"
+            elif a["id"].startswith("dev"):                    # v0.14.1: 本体の番組の名前 (本体の画面で一覧を読んでいれば)
+                files = (self.dev or {}).get("files") or []
+                i = int(a["id"][3:]) - 1
+                if i < len(files):
+                    label += f" ({files[i]['n']})"
+            elif a["id"] == "say":
+                t = str((load_cfg().get("say_body") or {}).get("text") or "")
+                label += f" ({t[:10]})" if t else " (まだ)"
             v = "押して…" if learning == a["id"] else (f"ボタン {mp[a['id']]}" if a["id"] in mp else "-")
             items.append((label, v))
         if "cmd" in pd:                                  # ハブ v0.14.0: コマンド入力 (最後の行)
@@ -1096,10 +1115,8 @@ class App:
             for i, p in enumerate(self.progs):
                 if p["key"].lower() == val.lower():
                     self.prog_start(i); return
-            if val.lower() in self.FX_KEYS:               # v0.13.9: Z 波動 / X 昇竜 (プログラムに同じキーがあればそちら)
-                self.fx_play(self.FX_KEYS[val.lower()]); return
 
-    FX_KEYS = {"z": "hadou", "x": "shoryu", "c": "tatsumaki"}
+    FX_KEYS = {}                                          # v0.14.1: 技はキーではなくアケコンのコマンドで出す
 
     def fx_play(self, name):
         if self.hub.st.get("fx") is None:

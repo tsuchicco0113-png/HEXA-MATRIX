@@ -32,8 +32,10 @@ APP_CFG = os.path.join(CFG_DIR, "app.json")
 ACTIONS = [
     ("prog1", "プログラム 1"), ("prog2", "プログラム 2"), ("prog3", "プログラム 3"), ("prog4", "プログラム 4"),
     ("face_next", "顔 次へ"), ("face_prev", "顔 前へ"), ("speed", "速さ 切り替え"), ("stop", "止める"),
-    ("fx_hadou", "波動拳 (音+HIT)"), ("fx_shoryu", "昇竜拳 (音+HIT)"), ("fx_tatsumaki", "竜巻旋風脚 (音+HIT)"),        # v0.13.9 ハブ: エフェクト
+    ("say", "ことば 流す"),                                                    # v0.14.1 ハブ: CPZ の「ことば」で作った文字
+    ("dev1", "本体 1番"), ("dev2", "本体 2番"), ("dev3", "本体 3番"), ("dev4", "本体 4番"),   # 本体に保存した番組
 ]
+# 技 (波動拳・昇竜拳・竜巻旋風脚) はボタン割り当てではなくコマンド入力で出す (COMMANDS)
 SPEEDS = [40, 60, 80, 100]
 # v0.14.0 ハブ: コマンド入力 (テンキー表記、右向き)。ボタンを押した瞬間に、直前のレバーの動きを見る。
 #   623 は 236 を含みやすいので先に見る。どのボタンでも出る (割り当てた動きより優先)
@@ -77,14 +79,17 @@ def eviocgabs(code):
 
 
 class Pad:
-    def __init__(self, walker, before_walk=None, log=print, finder=find_pads, fx=None):
+    def __init__(self, walker, before_walk=None, log=print, finder=find_pads, fx=None, say=None, dev_play=None):
         self.walker = walker
+        self.say = say                          # v0.14.1: say(opt) CPZ から文字を流す
+        self.dev_play = dev_play                # v0.14.1: dev_play(番号 0〜) 本体の番組を流す
         self.fx = fx                            # v0.13.9: fx(name) で音と絵を出す
         self.before_walk = before_walk          # 歩く前に呼ぶ (CPZ から流している絵を止める)
         self.log = log
         self.finder = finder
         self.cfg = _load(PAD_CFG)
-        self.map = {k: int(v) for k, v in (self.cfg.get("map") or {}).items() if isinstance(v, int)}
+        acts = dict(ACTIONS)
+        self.map = {k: int(v) for k, v in (self.cfg.get("map") or {}).items() if isinstance(v, int) and k in acts}
         app = _load(APP_CFG)
         self.speed = int(self.cfg.get("speed") or app.get("wspeed") or 60)
         self.face = 0
@@ -336,12 +341,22 @@ class Pad:
         self.sent = time.time()
 
     def do(self, act):
-        if act.startswith("fx_"):
-            if self.fx:
-                try:
-                    self.fx(act[3:])
-                except Exception as e:
-                    self.err = str(e)
+        if act == "say" or act.startswith("dev"):
+            self.prog = None
+            if self.dir != (0, 0):
+                self._go(0, 0)                  # 歩いていたら止めてから (絵が届くと本体は顔をやめる)
+            try:
+                if act == "say":
+                    opt = _load(APP_CFG).get("say_body")
+                    if not opt or not str(opt.get("text") or "").strip():
+                        raise RuntimeError("ことばがありません (CPZ アプリの「ことば」で一度流してください)")
+                    if self.say:
+                        self.say(opt)
+                elif self.dev_play:
+                    self.dev_play(int(act[3:]) - 1)
+                self.err = None
+            except Exception as e:
+                self.err = str(e)
             return
         if act == "stop":
             self.prog = None

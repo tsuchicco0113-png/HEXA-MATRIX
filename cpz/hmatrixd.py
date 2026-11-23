@@ -42,7 +42,7 @@ import hxengine as H  # noqa: E402
 import hmatrix_pad  # noqa: E402  v0.13.7: アケコン / ゲームパッド
 import hmatrix_fx  # noqa: E402  v0.13.9: エフェクト (音 + 絵)
 
-VERSION = "0.14.0"
+VERSION = "0.14.1"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -1291,7 +1291,7 @@ def main():
         if HUB.player.job is not None:
             HUB.player.stop()                    # CPZ から流している絵は止める (顔と混ざらない)
     HUB.fx = hmatrix_fx.Fx(lambda pl: HUB.link.send(packet(T_FX, pl)), lambda: HUB.link.fw_at_least(0, 14, 1), log)
-    HUB.pad = hmatrix_pad.Pad(HUB.walker, before_walk, log, fx=HUB.fx.play).start()
+    HUB.pad = hmatrix_pad.Pad(HUB.walker, before_walk, log, fx=HUB.fx.play, say=HUB.say, dev_play=HUB.dev_play).start()
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     srv.daemon_threads = True
     log(f"HEXA MATRIX hub {VERSION}  http://{local_ip()}:{a.port}/  library: {a.lib}")
