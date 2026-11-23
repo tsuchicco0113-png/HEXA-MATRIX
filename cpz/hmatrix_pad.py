@@ -41,6 +41,7 @@ SPEEDS = [40, 60, 80, 100]
 #   623 は 236 を含みやすいので先に見る。どのボタンでも出る (割り当てた動きより優先)
 COMMANDS = [("shoryu", (6, 2, 3)), ("hadou", (2, 3, 6)), ("tatsumaki", (2, 1, 4))]
 CMD_WINDOW = 0.6        # レバーを入れ始めてからボタンまで (秒)
+SPIN_SEC = 2.0          # 竜巻旋風脚: その場で右に回る秒数 (pad.json の "spin" で変えられる、0 で回らない)
 CMD_DELAY = 0.12        # コマンド入力を使う時は、レバーを入れてこれだけ続いてから歩き出す (入力中にピクッと動かない)
 N_FACES = 7          # アプリの WALK_FACES と同じ (0 = おまかせ … 6 = 箱庭のキャラ)
 
@@ -110,6 +111,7 @@ class Pad:
         self.pend = None                        # (動き, 入れ始めた時刻) 歩き出し待ち
         self.cmd_lock = False                   # 技を出した後、レバーを戻すまで歩かない
         self.cmd_last = None
+        self.spin_until = 0.0                   # 竜巻旋風脚で回っている間 (この時刻まで)
         self.lock = threading.Lock()
         self.stop_flag = False
         self.th = threading.Thread(target=self.run, daemon=True)
@@ -236,8 +238,12 @@ class Pad:
             name = self.motion(now)
             if name:
                 self.cmd_last = name
-                self.hist = []; self.pend = None; self.cmd_lock = True; self.prog = None
-                if self.dir != (0, 0):
+                self.hist = []; self.pend = None; self.cmd_lock = True; self.prog = None; self.spin_until = 0.0
+                spin = float(self.cfg.get("spin", SPIN_SEC) or 0)
+                if name == "tatsumaki" and spin > 0:
+                    self.spin_until = now + spin
+                    self._go(0, -1)                 # 右回り (旋回は + が左)
+                elif self.dir != (0, 0):
                     self._go(0, 0)
                 try:
                     self.fx(name)
@@ -302,6 +308,13 @@ class Pad:
             self._prog_tick(now)
         fb, lr = self.lever()
         self._rec(now, fb, lr)
+        if self.spin_until:                     # 竜巻旋風脚: 決めた時間だけ右に回る (レバーは見ない)
+            if now >= self.spin_until:
+                self.spin_until = 0.0
+                self._go(0, 0)
+            elif now - self.sent > 0.5:
+                self._go(0, -1)
+            return
         if fb or lr:
             self.prog = None                    # レバーを入れたらプログラムはやめる
         if self.prog:
