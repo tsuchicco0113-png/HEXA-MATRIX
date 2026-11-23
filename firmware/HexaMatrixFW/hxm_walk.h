@@ -124,21 +124,77 @@ struct HxmWalk {
 //   回っていなければ片道の半分だけ前へ送って位相をずらす (逆に大きく回っていたら 1 片道ぶん送る)。
 struct HxmTurn {
   int8_t   dir = 0;            // +1 左 (上から見て反時計回り) / −1 右 (時計回り) / 0 しない
-  uint16_t half = 250;         // 片道 ms
+  uint16_t half = 350;         // 片道 ms (v0.13.7: 実機のスキャンで 350 が強かった)
   uint32_t until = 0;          // 指令の期限
-  uint8_t  ph = 0;             // 0 落ち着く / 1 往復 / 2 位相送り
+  uint8_t  ph = 0;             // 0 落ち着く / 1 往復 / 2 位相送り (大きく)
   uint16_t sendMs = 0;         // 位相送りの長さ
   int16_t  swing = 0;
+  int16_t  nudge = 0;          // v0.13.7: このブロックの最初の前の片道に足す ms (± で往復の中心を少しずらす)
+  int8_t   nudgeDir = 1;
+  int8_t   corrDir = 1;        // つかんだ後、回る量が減った時に位相を直す向き (うまくいった向きを覚える)
+  bool     corrPending = false;
+  uint8_t  bad = 0;            // 続けて外れたブロック数
   uint32_t at = 0;
-  float    y0 = 0.f;
-  float    goodDeg = 4.f;      // 2 往復でこれだけ狙った向きに回れば当たり
-  uint32_t blocks = 0, sends = 0;
+  float    y0 = 0.f, prevD = -1000.f;
+  float    goodDeg = 15.f;     // 2 往復 (片道 350ms なら 1.4 秒) でこれだけ狙った向きに回れば当たり
+  uint32_t blocks = 0, sends = 0, nudges = 0;
 
   void command(int8_t d, uint8_t ttl, uint32_t now) {
-    if (d != dir) { dir = d; ph = 0; at = now; swing = 0; }
+    if (d != dir) { dir = d; ph = 0; at = now; swing = 0; nudge = 0; bad = 0; prevD = -1000.f; locked = false; around = 0; }
     until = now + (uint32_t)(ttl ? ttl : 5) * 100u;
   }
   bool active() const { return dir != 0; }
+  uint32_t strokeMs() const { return swing == 0 ? (uint32_t)((int)half + nudge) : half; }
+  bool     locked = false;     // 当たりの位相をつかんでいる
+  bool     warm = false;       // 位相を送った直後の 1 往復は測らない (回り方が落ち着くまで)
+  int8_t   sendDir = 1;        // 位相送りの向き (+ 前 / − 後)
+  uint8_t  around = 0;         // つかみ損ねた所のまわりを前後に探している段 (0 = していない)
+  int8_t   aroundFirst = -1;   // まわりを探す時に先に行く向き。見つかった向きを覚える (中心がずれていく向き)
+  int8_t   aroundPos = 0;      // 見失った所からいまどれだけ離れたか (片道の 1/4 単位)
+  /// 探す間は 1 往復ごと、つかんだら 2 往復ごとに見る
+  int blockSwings() const { return locked ? 4 : 2; }
+  /// 探す: 外れならすぐ位相を送る (逆に大きく回っていたら片道ぶん、そうでなければ半分)。当たればつかむ。
+  /// つかんだ後: 少しずつ位相をずらして回る量が増える向きを追う (山登り)。2 回続けて外れたら探し直す
+  void judge(float d) {
+    blocks++;
+    if (!locked) {
+      if (d >= goodDeg * 0.5f) {
+        if (around && aroundPos) corrDir = aroundFirst = aroundPos > 0 ? 1 : -1;   // 見つかった側を次は先に探す
+        locked = true; bad = 0; around = 0; prevD = d * 2.f; nudge = 0; corrPending = false; return;
+      }
+      ph = 2; sends++; nudge = 0;
+      if (around && around <= 6) {                     // 見失った所のまわり: 先に行く向きに 1, 逆へ 1, 2, 2, 3, 3 (片道の 1/4 きざみ)
+        static const int8_t pos[6] = {1, -1, 2, -2, 3, -3};
+        int target = pos[around - 1] * aroundFirst;
+        int m = target - aroundPos;
+        aroundPos = (int8_t)target;
+        sendDir = m < 0 ? -1 : 1;
+        sendMs = (uint16_t)((m < 0 ? -m : m) * (half / 4));
+        around++;
+        return;
+      }
+      around = 0;
+      sendDir = 1;
+      sendMs = d < -goodDeg ? half : half / 2;
+      return;
+    }
+    if (d < goodDeg) {
+      if (++bad >= 2) {
+        locked = false; bad = 0; prevD = -1000.f; nudge = 0; around = 1; aroundPos = 0; aroundFirst = corrDir;
+        return;
+      }
+    } else bad = 0;
+    // 当たりの間: 回る量が減ってきたら (中心がずれていく個体)、片道の 1/4 だけ位相を直す。
+    // 直して増えればその向きを覚え、増えなければ逆へ 2 倍直す
+    int16_t q = (int16_t)(half / 4);
+    if (corrPending && d >= prevD) corrPending = false;            // 直した向きで良くなった
+    if (prevD > -999.f && d < prevD * 0.8f) {
+      if (corrPending) { corrDir = -corrDir; nudge = corrDir * 2 * q; }
+      else nudge = corrDir * q;
+      corrPending = true; nudges++;
+    } else nudge = 0;
+    if (d > prevD || nudge == 0) prevD = d;
+  }
   /// 毎回。戻り値はサーボへ出す速さ % (+100 前 / −100 後 / 0)
   int tick(uint32_t now, float yaw) {
     if (dir && (int32_t)(now - until) > 0) dir = 0;
@@ -147,25 +203,22 @@ struct HxmTurn {
     switch (ph) {
       case 0:
         if (el < 150) return 0;
-        ph = 1; swing = 0; at = now; y0 = yaw;
+        ph = 1; swing = 0; at = now; y0 = yaw; nudge = 0;
         return 100;
       case 1:
-        if (el < half) return (swing & 1) ? -100 : 100;
+        if (el < strokeMs()) return (swing & 1) ? -100 : 100;
         swing++; at = now;
-        if (swing >= 4) {                                     // 2 往復ごとに当たりか見る
-          blocks++;
+        if (warm && swing >= 2) { warm = false; swing = 0; y0 = yaw; return 100; }
+        if (swing >= blockSwings()) {                         // 探す間は 1 往復、つかんだら 2 往復ごとに見る
           float d = (yaw - y0) * dir;
           y0 = yaw; swing = 0;
-          if (d < goodDeg) {                                  // 回っていない / 逆に回った → 位相を送る
-            ph = 2; sends++;
-            sendMs = d < -3.f * goodDeg ? half : half / 2;
-            return 100;
-          }
+          judge(d);
+          if (ph == 2) return sendDir > 0 ? 100 : -100;
         }
         return (swing & 1) ? -100 : 100;
-      default:                                                // 位相送り (前へ)
-        if (el < sendMs) return 100;
-        ph = 1; swing = 0; at = now; y0 = yaw;
+      default:                                                // 位相送り (前へ / 後へ)
+        if (el < sendMs) return sendDir > 0 ? 100 : -100;
+        ph = 1; swing = 0; at = now; y0 = yaw; nudge = 0; warm = true;
         return 100;
     }
   }

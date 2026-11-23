@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cassert>
+#include <initializer_list>
 #include <cmath>
 #include "../firmware/HexaMatrixFW/hxm_walk.h"   // g++ -std=c++17 tests/walk_test.cpp && ./a.out
 static void show(const uint16_t* r) {
@@ -64,41 +65,41 @@ int main() {
     c3.pulseOff = 0; assert(v.ramp(2600, c3) == -50);   // 片方 0 なら刻まない
     puts("pulse ok");
   }
-  {   // v0.13.6: その場旋回。クランクの位相 (0〜1 周) によって往復で回る向きが変わる模型で、狙った向きへ回れるか
-    HxmTurn t; t.half = 250;
-    float crank = 0.40f;                 // いまの位相 (周)。0.6〜0.8 で往復すると左、0.1〜0.3 で右に回るとする
-    float yaw = 0.f;
-    auto rateAt = [](float c) {          // 往復の中心 c での回る速さ (deg/s、+ が左)
-      c -= floorf(c);
-      if (c > 0.6f && c < 0.8f) return 40.f;
-      if (c > 0.1f && c < 0.3f) return -40.f;
-      return -3.f;                       // それ以外はわずかに時計回り (この個体のくせ)
+  {   // v0.13.7: その場旋回。実機のスキャン結果を位相の関数にした模型で、前の方が少し速い / 遅い (往復すると中心がずれていく)
+      //          場合も含めて、左右とも位相を見失わずに回り続けるか
+    auto sim = [](int dir, float fwdGain, float startCrank, unsigned& sends, unsigned& nudges) {
+      HxmTurn t; t.half = 350;
+      float crank = startCrank, yaw = 0.f, center = crank;
+      auto rateAt = [](float c) {          // 実機の旋回スキャン (片道 350ms、2026-11-23) の 8 段を、1 段 = 0.0525 周として周期的に並べたもの
+        static const float r[8] = {-28, 86, 78, -86, -161, -15, 200, -33};   // 5 往復 (3.5 秒) で回った角度
+        float k = c / 0.0525f;
+        k -= 8.f * floorf(k / 8.f);
+        int i = (int)k; float f = k - i;
+        return (r[i] * (1 - f) + r[(i + 1) % 8] * f) / 3.5f;
+      };
+      for (uint32_t now = 0; now < 20000; now += 10) {
+        if (now % 1000 == 0) t.command(dir, 50, now);
+        int o = t.tick(now, yaw);
+        crank += o * 0.01f * 0.003f * (o > 0 ? fwdGain : 1.f);
+        center += (crank - center) * 0.05f;          // 往復の中心 ≒ 位相の 0.2 秒の移動平均
+        yaw += rateAt(center) * 0.01f;
+      }
+      sends = t.sends; nudges = t.nudges;
+      return yaw;
     };
-    float center = crank;
-    t.command(+1, 50, 0);
-    uint32_t now = 0; int prev = 0;
-    for (; now < 20000; now += 10) {
-      if (now % 1000 == 0) t.command(+1, 50, now);
-      int o = t.tick(now, yaw);
-      crank += o * 0.01f * 0.004f;       // 100% で 0.4 周/秒 (= 片道 250ms で 0.1 周)
-      center += (crank - center) * 0.02f;          // 往復の中心 ≒ 位相の 0.5 秒の移動平均
-      prev = o;
-      yaw += rateAt(center) * 0.01f;
+    float sumL = 0.f, sumR = 0.f; int n = 0;
+    for (float g : {1.0f, 1.04f, 0.96f}) {
+      for (float c0 : {0.0f, 0.35f, 0.7f}) {
+        unsigned s1, n1, s2, n2;
+        float l = sim(+1, g, c0, s1, n1), r = sim(-1, g, c0, s2, n2);
+        printf("gain %.2f start %.2f: left %.0f (sends %u) right %.0f (sends %u)\n", g, c0, l, s1, r, s2);
+        fflush(stdout); assert(l > 0.f && r < 0.f);      // どの場合も狙った向きへは回る
+        sumL += l; sumR += r; n++;
+      }
     }
-    printf("turn left: yaw %.0f deg, sends %u\n", yaw, (unsigned)t.sends);
-    assert(yaw > 300.f);                 // 20 秒でしっかり左へ回る (位相を探してから)
-    t.command(-1, 50, now); float y1 = yaw;
-    for (uint32_t end = now + 20000; now < end; now += 10) {
-      if (now % 1000 == 0) t.command(-1, 50, now);
-      int o = t.tick(now, yaw);
-      crank += o * 0.01f * 0.004f;
-      center += (crank - center) * 0.02f;          // 往復の中心 ≒ 位相の 0.5 秒の移動平均
-      prev = o;
-      yaw += rateAt(center) * 0.01f;
-    }
-    printf("turn right: yaw %.0f deg\n", yaw - y1);
-    assert(yaw - y1 < -300.f);
-    t.until = now - 1; assert(t.tick(now + 10, yaw) == 0 && !t.active());   // 期限切れで止まる
+    printf("avg left %.0f right %.0f (20 s)\n", sumL / n, sumR / n);
+    assert(sumL / n > 250.f && sumR / n < -250.f);
+    HxmTurn t; t.command(1, 1, 0); t.until = 0; assert(t.tick(10, 0) == 0 && !t.active());   // 期限切れで止まる
     puts("turn ok");
   }
   uint16_t r[16];

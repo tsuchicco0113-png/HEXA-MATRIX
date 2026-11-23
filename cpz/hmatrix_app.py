@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.3"
+VERSION = "0.13.4"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -770,7 +770,7 @@ class App:
                 "yawzero": ("向きを0に", "ENTER"),
                 "whead": ("まっすぐ補正", ("入" if w.get("head") else "切") if "head" in w else "要v0.13.6"),
                 "wheadth": ("補正を始めるずれ", f"{w.get('hth', 10)}°" if "hth" in w else "-"),
-                "thalf": ("旋回の片道", f"{w.get('thalf', 250)}ms" if "thalf" in w else "-"),
+                "thalf": ("旋回の片道", f"{w.get('thalf', 350)}ms" if "thalf" in w else "-"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),
                 "tres1": ("結果 1〜4 (°、+は左回り)", self.scan_res(w, 0)),
                 "tres2": ("結果 5〜8", self.scan_res(w, 4))}
@@ -845,6 +845,8 @@ class App:
                  else "前進" if sp > 0 else "後退" if sp < 0 else "停止中")
         if w.get("hfix"):
             state = "向きを直し中"
+        elif self.walk.get("turn") and sp and "tlock" in w:
+            state += "" if w.get("tlock") else " (位相を探し中)"
         d.text((140, 112), self.ellipsize(state, 70, self.font_s), fill=FG, font=self.font_s)
         bv = dv.get("batt")
         if isinstance(bv, int) and bv > 0:
@@ -1071,7 +1073,7 @@ class App:
         elif key == "wheadth" and "hth" in w:
             cfgcall({"wheadth": max(3, min(60, int(w.get("hth", 10)) + step * (5 if int(w.get("hth", 10)) >= 10 else 1)))})
         elif key == "thalf" and "thalf" in w:
-            cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 250)) + step * 50))})
+            cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 350)) + step * 50))})
         elif key == "tscan" and "scan" in w:             # v0.13.5: 旋回スキャン
             if val == "ENTER":
                 if (w.get("scan") or {}).get("st") == 1:

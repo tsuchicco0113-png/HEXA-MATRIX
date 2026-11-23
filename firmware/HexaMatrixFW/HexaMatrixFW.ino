@@ -99,6 +99,8 @@
 //            ジャイロで回った角度を測る。FS90R は位置が読めないので、その場で回れる位相があるかを実機で確かめる試験
 //   v0.13.6: その場旋回 (WALK の 4 バイト目 = 1)。往復させながらジャイロで位相を探して狙った向きへ回る。
 //            まっすぐ補正 (whead / wheadth): 歩いている間に向きがしきい値よりずれたら、止まって旋回で戻してから歩き続ける
+//   v0.13.7: 旋回の位相の探し方を直す (実機で左回りが「探し直し」をくり返した)。当たりをつかんだら動かさず、回る量が
+//            減ってきた時だけ少し直す (直す向きを覚える)。見失ったら近くを前後に探す。片道の既定を 350ms に
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -121,7 +123,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.6";
+static const char* FW_VER = "0.13.7";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -372,12 +374,12 @@ static void sendStatus() {
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
               "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u,"
               "\"scan\":{\"st\":%u,\"half\":%u,\"n\":%d,\"r\":[%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f]},"
-              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu}}\n",
+              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
               wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff,
               scanSt, scanHalf, scanTrial, scanRes[0], scanRes[1], scanRes[2], scanRes[3], scanRes[4], scanRes[5], scanRes[6], scanRes[7],
-              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends);
+              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -1016,7 +1018,7 @@ static void loadWalkCfg() {
   wcfg.pulseOff = prefs.getUShort("woff", 0);
   cfgHead   = prefs.getBool("whd", false);
   cfgHeadTh = prefs.getUChar("whth", 10);
-  turn.half = prefs.getUShort("thalf", 250);
+  turn.half = prefs.getUShort("thalf", 350);
   cfgWalkChar = prefs.getBool("wch", false);
 }
 
