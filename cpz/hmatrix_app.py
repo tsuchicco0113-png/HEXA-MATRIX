@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.9"
+VERSION = "0.14.0"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -967,6 +967,8 @@ class App:
                 label += f" ({progs[i]['name']})" if i < len(progs) else " (なし)"
             v = "押して…" if learning == a["id"] else (f"ボタン {mp[a['id']]}" if a["id"] in mp else "-")
             items.append((label, v))
+        if "cmd" in pd:                                  # ハブ v0.14.0: コマンド入力 (最後の行)
+            items.append(("コマンド技 236波動/623昇竜", "入" if pd.get("cmd") else "切"))
         if items:
             self.list_draw(d, items, min(self.pad_i, len(items) - 1), LCD_W - 4, top=36, row=15)
         d.text((4, LCD_H - BOT_H - 13), self.ellipsize("レバー: 上下=前後 左右=その場旋回 (覚えさせ不要)", LCD_W - 8, self.font_t),
@@ -983,9 +985,17 @@ class App:
             self.walk_view = "set"; return
         if not acts:
             return
+        if "cmd" in pd:
+            acts = acts + ["_cmd"]
         if val in ("UP", "DOWN", "TAB"):
             self.pad_i = (self.pad_i + (-1 if val == "UP" else 1)) % len(acts); return
         a = acts[self.pad_i % len(acts)]
+        if a == "_cmd":
+            if val in ("ENTER", "LEFT", "RIGHT"):
+                on = not pd.get("cmd")
+                self.ask("アケコン", lambda: self.hub.call("POST", "/api/pad/cmd", {"on": on}),
+                         lambda r: self.toast("レバー↓↘→+ボタン=波動拳 / →↓↘+ボタン=昇竜拳" if on else "コマンド技を切りました", 4))
+            return
         if val == "ENTER":
             if not pd.get("connected"):
                 self.toast("アケコンが見つかりません (CPZ に USB で挿す)", 3, ok=False); return

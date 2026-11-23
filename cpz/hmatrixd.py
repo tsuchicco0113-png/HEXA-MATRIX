@@ -42,7 +42,7 @@ import hxengine as H  # noqa: E402
 import hmatrix_pad  # noqa: E402  v0.13.7: アケコン / ゲームパッド
 import hmatrix_fx  # noqa: E402  v0.13.9: エフェクト (音 + 絵)
 
-VERSION = "0.13.9"
+VERSION = "0.14.0"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -1175,6 +1175,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, dict(ok=True, **HUB.fx.play(str(j.get("name", "")))))
             if path == "/api/pad/learn":                     # {"action": "prog1" など / null でやめる} 次に押したボタンを覚える
                 return self._send(200, dict(ok=True, pad=HUB.pad.set_learn(j.get("action"))))
+            if path == "/api/pad/cmd":                       # {"on": true} コマンド入力 (236 波動拳 / 623 昇竜拳)
+                return self._send(200, dict(ok=True, pad=HUB.pad.set_cmd(j.get("on", True))))
             if path == "/api/pad/clear":                     # {"action": ...} 割り当てを消す
                 return self._send(200, dict(ok=True, pad=HUB.pad.clear(j.get("action"))))
             return self._send(404, {"ok": False, "err": "not found"})

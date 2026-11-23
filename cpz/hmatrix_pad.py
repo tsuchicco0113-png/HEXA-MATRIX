@@ -35,6 +35,11 @@ ACTIONS = [
     ("fx_hadou", "波動拳 (音+HIT)"), ("fx_shoryu", "昇竜拳 (音+HIT)"),        # v0.13.9 ハブ: エフェクト
 ]
 SPEEDS = [40, 60, 80, 100]
+# v0.14.0 ハブ: コマンド入力 (テンキー表記、右向き)。ボタンを押した瞬間に、直前のレバーの動きを見る。
+#   623 は 236 を含みやすいので先に見る。どのボタンでも出る (割り当てた動きより優先)
+COMMANDS = [("shoryu", (6, 2, 3)), ("hadou", (2, 3, 6))]
+CMD_WINDOW = 0.6        # レバーを入れ始めてからボタンまで (秒)
+CMD_DELAY = 0.12        # コマンド入力を使う時は、レバーを入れてこれだけ続いてから歩き出す (入力中にピクッと動かない)
 N_FACES = 7          # アプリの WALK_FACES と同じ (0 = おまかせ … 6 = 箱庭のキャラ)
 
 
@@ -95,6 +100,11 @@ class Pad:
         self.last_btn = None                    # 最後に押されたボタン (表示用)
         self.prog = None                        # 動いているプログラム
         self.err = None
+        self.cmd = bool(self.cfg.get("cmd", True))   # コマンド入力 (236 / 623)
+        self.hist = []                          # [(時刻, テンキー)] レバーの動き
+        self.pend = None                        # (動き, 入れ始めた時刻) 歩き出し待ち
+        self.cmd_lock = False                   # 技を出した後、レバーを戻すまで歩かない
+        self.cmd_last = None
         self.lock = threading.Lock()
         self.stop_flag = False
         self.th = threading.Thread(target=self.run, daemon=True)
@@ -109,6 +119,7 @@ class Pad:
             return {"connected": self.fd is not None, "name": self.name, "lever": self.lever_kind,
                     "map": dict(self.map), "learn": self.learn, "speed": self.speed, "face": self.face,
                     "last": self.last_btn, "running": (self.prog or {}).get("name"), "err": self.err,
+                    "cmd": self.cmd, "cmd_last": self.cmd_last,
                     "actions": [{"id": a, "label": l} for a, l in ACTIONS]}
 
     def set_learn(self, action):
@@ -116,6 +127,12 @@ class Pad:
             if action is not None and action not in dict(ACTIONS):
                 raise RuntimeError("その動きはありません")
             self.learn = action
+        return self.status()
+
+    def set_cmd(self, on):
+        with self.lock:
+            self.cmd = bool(on)
+            self._save()
         return self.status()
 
     def clear(self, action):
@@ -128,6 +145,7 @@ class Pad:
         os.makedirs(CFG_DIR, exist_ok=True)
         self.cfg["map"] = self.map
         self.cfg["speed"] = self.speed
+        self.cfg["cmd"] = self.cmd
         tmp = PAD_CFG + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.cfg, f, ensure_ascii=False, indent=1)
@@ -207,6 +225,20 @@ class Pad:
             return
         if et != EV_KEY or val != 1:
             return
+        if self.learn is None and self.cmd and self.fx:      # コマンド技が入っていればそちらを出す
+            now = time.time()
+            self._rec(now, *self.lever())           # レバーと同時に押した時も入れる
+            name = self.motion(now)
+            if name:
+                self.cmd_last = name
+                self.hist = []; self.pend = None; self.cmd_lock = True; self.prog = None
+                if self.dir != (0, 0):
+                    self._go(0, 0)
+                try:
+                    self.fx(name)
+                except Exception as e:
+                    self.err = str(e)
+                return
         with self.lock:
             self.last_btn = code
             if self.learn:
@@ -236,15 +268,52 @@ class Pad:
                         y = 1 if n > 0 else -1
         return (-y, x)
 
+    @staticmethod
+    def numpad(fb, lr):
+        """テンキー表記 (右向き): 8 上 / 2 下 / 6 右 / 4 左 / 5 中立"""
+        return (1 if fb < 0 else 4 if fb == 0 else 7) + lr + 1
+
+    def _rec(self, now, fb, lr):
+        n = self.numpad(fb, lr)
+        if not self.hist or self.hist[-1][1] != n:
+            self.hist.append((now, n))
+        while self.hist and now - self.hist[0][0] > 1.5:
+            self.hist.pop(0)
+
+    def motion(self, now):
+        """直前 CMD_WINDOW 秒のレバーの動きから技を探す。無ければ None"""
+        seq = [n for t, n in self.hist if now - t <= CMD_WINDOW]
+        for name, pat in COMMANDS:
+            i = 0
+            for n in seq:
+                if n == pat[i]:
+                    i += 1
+                    if i == len(pat):
+                        return name
+        return None
+
     def tick(self, now):
         if self.prog:
             self._prog_tick(now)
         fb, lr = self.lever()
+        self._rec(now, fb, lr)
         if fb or lr:
             self.prog = None                    # レバーを入れたらプログラムはやめる
         if self.prog:
             return
         want = (fb, 0) if fb else (0, -lr)      # 斜めは前後を優先。旋回は + が左 (レバー左 = lr −1)
+        if self.cmd_lock:                       # 技の後: レバーを中立に戻すまで歩かない
+            if want != (0, 0):
+                return
+            self.cmd_lock = False
+        if self.cmd and self.fx and want != (0, 0) and want != self.dir:
+            if not self.pend or self.pend[0] != want:
+                self.pend = (want, now)         # 入れたばかり: 少し待つ (コマンド入力の途中かも)
+            if now - self.pend[1] < CMD_DELAY:
+                if self.dir != (0, 0):
+                    self._go(0, 0)              # 前の動きは止める
+                return
+        self.pend = None
         if want != self.dir or (want != (0, 0) and now - self.sent > 0.5):
             self._go(*want)
 
