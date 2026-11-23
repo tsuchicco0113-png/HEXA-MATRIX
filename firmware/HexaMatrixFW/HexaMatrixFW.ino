@@ -104,6 +104,8 @@
 //   v0.13.8: まっすぐ補正の見直し: ずれは 0.5 秒平均で判定 (一歩ごとの揺れで動き出さない)、戻す途中で逆向きに切り替えない、
 //            8 秒で戻せなければ今の向きを基準にしてあきらめる、補正の旋回中に WALK が来てもサーボへ歩きの値を書かない。
 //            旋回は逆へ 5° 回り出したら往復の途中でも位相を送る
+//   v0.13.9: 旋回の位置の覚え書き: 左右を続けて切り替える時は前に回れた所へ直接行く。左の当たりと右の当たりの距離を覚えて
+//            本体に保存し (toff)、探している最中に逆の当たりにいると分かったらその距離だけ一気に送る (左回りの立ち上がりを速く)
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -126,7 +128,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.8";
+static const char* FW_VER = "0.13.9";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -375,12 +377,13 @@ static void sendStatus() {
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
               "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u,"
               "\"scan\":{\"st\":%u,\"half\":%u,\"n\":%d,\"r\":[%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f]},"
-              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d,\"hfixes\":%lu,\"hgive\":%lu}}\n",
+              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d,\"hfixes\":%lu,\"hgive\":%lu,\"toff\":%d,\"tjump\":%lu}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
               wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff,
               scanSt, scanHalf, scanTrial, scanRes[0], scanRes[1], scanRes[2], scanRes[3], scanRes[4], scanRes[5], scanRes[6], scanRes[7],
-              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0, (unsigned long)head.fixes, (unsigned long)head.giveups);
+              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0, (unsigned long)head.fixes, (unsigned long)head.giveups,
+              turn.offsetOk ? (int)lroundf(turn.offset) : -9999, (unsigned long)turn.jumps);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -951,6 +954,7 @@ static void handleWalk() {
 /// v0.13.3: 出す速さを指令へゆっくり寄せてサーボへ (同じ値なら書かない)
 static void walkOut(uint32_t now) {
   int o = walk.ramp(now, wcfg);
+  if (o) turn.forget();                               // v0.13.9: 歩いたら旋回の覚えた位置は分からなくなる
   if (!walk.pulsing) return;
   uint16_t us = hxm_walk_us(wcfg, o);
   if (us != servoUs) servoWrite(us);
@@ -984,6 +988,7 @@ static void walkTick(uint32_t now) {
   if (turn.active()) {                                // 旋回: 全力で往復 (wmax は無視)
     HxmWalkCfg full = wcfg; full.maxPct = 100;
     int o = turn.tick(now, yawDeg);
+    if (turn.offsetNew) { turn.offsetNew = false; prefs.putFloat("toff", turn.offset); }   // 左右の距離を覚えた → 保存
     uint16_t us = hxm_walk_us(full, o);
     if (us != servoUs) servoWrite(us);
     walk.pulsing = true; walk.rampAt = now;
@@ -1014,6 +1019,7 @@ static void loadWalkCfg() {
   cfgHead   = prefs.getBool("whd", false);
   cfgHeadTh = prefs.getUChar("whth", 10);
   turn.half = prefs.getUShort("thalf", 350);
+  { float o = prefs.getFloat("toff", NAN); if (!isnan(o)) { turn.offset = o; turn.offsetOk = true; } }
   cfgWalkChar = prefs.getBool("wch", false);
 }
 
@@ -1130,6 +1136,7 @@ static void handleConfig() {
       else if (!strcmp(k, "wacc")) { int n = atoi(v); wcfg.accMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wacc", wcfg.accMs); }
       else if (!strcmp(k, "whead")) { cfgHead = on; prefs.putBool("whd", on); headFix = false; }
       else if (!strcmp(k, "wheadth")) { int n = atoi(v); cfgHeadTh = (uint8_t)(n < 3 ? 3 : n > 60 ? 60 : n); prefs.putUChar("whth", cfgHeadTh); }
+      else if (!strcmp(k, "toffclr")) { turn.offsetOk = false; turn.forget(); prefs.remove("toff"); }
       else if (!strcmp(k, "thalf")) { int n = atoi(v); turn.half = (uint16_t)(n < 100 ? 100 : n > 800 ? 800 : n); prefs.putUShort("thalf", turn.half); }
       else if (!strcmp(k, "tscan")) { int n = atoi(v); if (n > 0) scanStart((uint16_t)n); else scanStop(3); }
       else if (!strcmp(k, "won"))  { int n = atoi(v); wcfg.pulseOn  = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("won", wcfg.pulseOn); }

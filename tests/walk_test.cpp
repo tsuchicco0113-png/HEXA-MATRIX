@@ -98,6 +98,48 @@ int main() {
       }
     }
     printf("avg left %.0f right %.0f (20 s)\n", sumL / n, sumR / n);
+    {   // v0.13.9: 左右を 5 秒ずつ切り替える。2 回目からは覚えた所へ直接行くので早く回り出す
+      HxmTurn t; t.half = 350;
+      float crank = 0.2f, center = 0.2f, yaw = 0.f;
+      auto rate8 = [](float c) {
+        static const float r[8] = {-28, 86, 78, -86, -161, -15, 200, -33};
+        float k = c / 0.0525f; k -= 8.f * floorf(k / 8.f);
+        int i = (int)k; float f = k - i;
+        return (r[i] * (1 - f) + r[(i + 1) % 8] * f) / 3.5f;
+      };
+      float got[8];
+      for (int seg = 0; seg < 8; seg++) {
+        int d = (seg & 1) ? -1 : 1;
+        float y0 = yaw;
+        for (uint32_t k = 0; k < 5000; k += 10) {
+          uint32_t now = seg * 5000 + k;
+          if (k % 1000 == 0) t.command(d, 50, now);
+          int o = t.tick(now, yaw);
+          crank += o * 0.01f * 0.003f;
+          center += (crank - center) * 0.05f;
+          yaw += rate8(center) * 0.01f;
+        }
+        got[seg] = (yaw - y0) * d;
+      }
+      fprintf(stderr, "switch: L %.0f R %.0f L %.0f R %.0f L %.0f R %.0f L %.0f R %.0f (jumps %u)\n",
+             got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7], (unsigned)t.jumps);
+      for (int seg = 2; seg < 8; seg++) assert(got[seg] > 40.f);   // 2 回目からは覚えた所へ直接行く
+      // 歩いて位置を忘れても、左右の距離は覚えている。右の当たりにいる時に左を頼むと一気に送って回り出す
+      t.forget(); t.command(0, 1, 50000);
+      assert(t.offsetOk);
+      float y0 = yaw; uint32_t start = 50000;
+      while (fmodf(center / 0.0525f, 8.f) < 3.2f || fmodf(center / 0.0525f, 8.f) > 4.0f) { crank += 0.0003f; center = crank; }   // 右の当たりへ歩く
+      for (uint32_t k = 0; k < 5000; k += 10) {
+        uint32_t now = start + k;
+        if (k % 1000 == 0) t.command(1, 50, now);
+        int o = t.tick(now, yaw);
+        crank += o * 0.01f * 0.003f;
+        center += (crank - center) * 0.05f;
+        yaw += rate8(center) * 0.01f;
+      }
+      fprintf(stderr, "after walk, from right window: left %.0f in 5 s (jumps %u)\n", yaw - y0, (unsigned)t.jumps);
+      assert(yaw - y0 > 40.f);
+    }
     assert(sumL / n > 250.f && sumR / n < -250.f);
     HxmTurn t; t.command(1, 1, 0); t.until = 0; assert(t.tick(10, 0) == 0 && !t.active());   // 期限切れで止まる
     puts("turn ok");
@@ -125,6 +167,7 @@ int main() {
         base += rateAt(center) * 0.01f;
       } else {
         if (t.active()) t.command(0, 1, now);
+        t.forget();                                        // 歩いたら覚えた位置は忘れる (本体と同じ)
         crank += 0.6f * 0.003f;                            // 60% で歩く
         center = crank;
         base += -4.f * 0.01f;

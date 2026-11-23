@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.5"
+VERSION = "0.13.6"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -746,7 +746,7 @@ class App:
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
     WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
-                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "tscan", "tres1", "tres2"]
+                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "toff", "tscan", "tres1", "tres2"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -772,6 +772,8 @@ class App:
                           if "head" in w else "要v0.13.6"),
                 "wheadth": ("補正を始めるずれ", f"{w.get('hth', 10)}°" if "hth" in w else "-"),
                 "thalf": ("旋回の片道", f"{w.get('thalf', 350)}ms" if "thalf" in w else "-"),
+                "toff": ("左右の当たりの距離", (f"{w['toff']}ms (ENTERで消す)" if w.get("toff", -9999) > -9999 else "まだ")
+                         if "toff" in w else "要v0.13.9"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),
                 "tres1": ("結果 1〜4 (°、+は左回り)", self.scan_res(w, 0)),
                 "tres2": ("結果 5〜8", self.scan_res(w, 4))}
@@ -1075,6 +1077,8 @@ class App:
             cfgcall({"wheadth": max(3, min(60, int(w.get("hth", 10)) + step * (5 if int(w.get("hth", 10)) >= 10 else 1)))})
         elif key == "thalf" and "thalf" in w:
             cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 350)) + step * 50))})
+        elif key == "toff" and "toff" in w and val == "ENTER":   # v0.13.9: 覚えた左右の距離を消す (組み直した時)
+            cfgcall({"toffclr": True}, "左右の当たりの距離を消しました (次の旋回で覚え直します)")
         elif key == "tscan" and "scan" in w:             # v0.13.5: 旋回スキャン
             if val == "ENTER":
                 if (w.get("scan") or {}).get("st") == 1:

@@ -141,13 +141,43 @@ struct HxmTurn {
   uint32_t blocks = 0, sends = 0, nudges = 0;
 
   void command(int8_t d, uint8_t ttl, uint32_t now) {
-    if (d != dir) { dir = d; ph = 0; at = now; swing = 0; nudge = 0; bad = 0; prevD = -1000.f; locked = false; around = 0; }
+    if (d != dir) {
+      dir = d; ph = 0; at = now; swing = 0; nudge = 0; bad = 0; prevD = -1000.f; locked = false; around = 0;
+      int k = d > 0 ? 1 : 0;
+      if (d && lockOk[k]) {                            // 覚えた所へ直接行く
+        float delta = lockP[k] - P;
+        float a = delta < 0 ? -delta : delta;
+        if (a > 4.f * half) a = 4.f * half;
+        if (a > 30.f) { ph = 2; sendDir = delta < 0 ? -1 : 1; sendMs = (uint16_t)a; jumps++; }
+      }
+    }
     until = now + (uint32_t)(ttl ? ttl : 5) * 100u;
   }
   bool active() const { return dir != 0; }
   uint32_t strokeMs() const { return swing == 0 ? (uint32_t)((int)half + nudge) : half; }
   bool     locked = false;     // 当たりの位相をつかんでいる
-  bool     warm = false;       // 位相を送った直後の 1 往復は測らない (回り方が落ち着くまで)
+  bool     warm = false;       // 位相を送った直後は少し測らない (回り方が落ち着くまで)
+  uint8_t  warmSwings = 2;     // その長さ (片道の数)
+  // v0.13.9: 位相の覚え書き。旋回の間だけ「前へ回した時間 − 後へ回した時間」(ms) を数え、当たりをつかんだ所を向きごとに覚える。
+  //          歩くと分からなくなるので、歩いたら forget() で忘れる。左右を続けて切り替える時は覚えた所へ直接行く
+  float    P = 0.f;
+  float    lockP[2] = {0.f, 0.f};
+  bool     lockOk[2] = {false, false};
+  uint32_t lastTick = 0;
+  int      lastOut = 0;
+  uint32_t jumps = 0;
+  float    bestD[2] = {0.f, 0.f};
+  // 左の当たりと右の当たりの間の距離 (ms)。歩いても変わらない (脚のつくりで決まる) ので forget() では忘れない。
+  // 探している最中に逆向きへ大きく回ったら (= 逆の当たりにいる)、この距離だけ一気に送る
+  float    offset = 0.f;       // 左 − 右
+  bool     offsetOk = false;
+  bool     offsetNew = false;  // 覚え直した (本体に保存してもらう合図)
+  void learnOffset() {
+    if (!lockOk[0] || !lockOk[1]) return;
+    float o = lockP[1] - lockP[0];
+    if (!offsetOk || fabsf(o - offset) > 20.f) { offset = o; offsetOk = true; offsetNew = true; }
+  }
+  void forget() { lockOk[0] = lockOk[1] = false; bestD[0] = bestD[1] = 0.f; }
   int8_t   sendDir = 1;        // 位相送りの向き (+ 前 / − 後)
   uint8_t  around = 0;         // つかみ損ねた所のまわりを前後に探している段 (0 = していない)
   int8_t   aroundFirst = -1;   // まわりを探す時に先に行く向き。見つかった向きを覚える (中心がずれていく向き)
@@ -161,7 +191,9 @@ struct HxmTurn {
     if (!locked) {
       if (d >= goodDeg * 0.5f) {
         if (around && aroundPos) corrDir = aroundFirst = aroundPos > 0 ? 1 : -1;   // 見つかった側を次は先に探す
-        locked = true; bad = 0; around = 0; prevD = d * 2.f; nudge = 0; corrPending = false; return;
+        locked = true; bad = 0; around = 0; prevD = d * 2.f; nudge = 0; corrPending = false;
+        { int k = dir > 0 ? 1 : 0; if (!lockOk[k] || d * 2.f > bestD[k]) { lockP[k] = P; bestD[k] = d * 2.f; } lockOk[k] = true; learnOffset(); }
+        return;
       }
       ph = 2; sends++; nudge = 0;
       if (around && around <= 6) {                     // 見失った所のまわり: 先に行く向きに 1, 逆へ 1, 2, 2, 3, 3 (片道の 1/4 きざみ)
@@ -175,10 +207,18 @@ struct HxmTurn {
         return;
       }
       around = 0;
+      if (d < -goodDeg && offsetOk) {                  // 逆の当たりにいる → 覚えた距離だけ一気に送る
+        float delta = dir > 0 ? offset : -offset;
+        float a = delta < 0 ? -delta : delta;
+        if (a > 4.f * half) a = 4.f * half;
+        sendDir = delta < 0 ? -1 : 1; sendMs = (uint16_t)(a < 30.f ? 30.f : a); jumps++;
+        return;
+      }
       sendDir = 1;
       sendMs = d < -goodDeg ? half : half / 2;
       return;
     }
+    if (d > bestD[dir > 0 ? 1 : 0]) { bestD[dir > 0 ? 1 : 0] = d; lockP[dir > 0 ? 1 : 0] = P; learnOffset(); }   // いちばん回った所を覚える
     if (d < goodDeg) {
       if (++bad >= 2) {
         locked = false; bad = 0; prevD = -1000.f; nudge = 0; around = 1; aroundPos = 0; aroundFirst = corrDir;
@@ -198,6 +238,12 @@ struct HxmTurn {
   }
   /// 毎回。戻り値はサーボへ出す速さ % (+100 前 / −100 後 / 0)
   int tick(uint32_t now, float yaw) {
+    int o = tickOut(now, yaw);
+    if (lastTick) P += (float)lastOut / 100.f * (float)(uint32_t)(now - lastTick);
+    lastTick = now; lastOut = o;
+    return o;
+  }
+  int tickOut(uint32_t now, float yaw) {
     if (dir && (int32_t)(now - until) > 0) dir = 0;
     if (!dir) return 0;
     uint32_t el = now - at;
@@ -216,7 +262,7 @@ struct HxmTurn {
         }
         if (el < strokeMs()) return (swing & 1) ? -100 : 100;
         swing++; at = now;
-        if (warm && swing >= 2) { warm = false; swing = 0; y0 = yaw; return 100; }
+        if (warm && swing >= warmSwings) { warm = false; swing = 0; y0 = yaw; return 100; }
         if (swing >= blockSwings()) {                         // 探す間は 1 往復、つかんだら 2 往復ごとに見る
           float d = (yaw - y0) * dir;
           y0 = yaw; swing = 0;

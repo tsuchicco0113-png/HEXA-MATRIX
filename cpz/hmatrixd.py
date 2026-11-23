@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.13.5"
+VERSION = "0.13.6"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -853,6 +853,7 @@ class Hub:
     PULSE_KEYS = ("won", "woff")   # v0.13.4: 刻んで歩く (ms)
     SCAN_KEYS = ("tscan",)         # v0.13.5: 旋回スキャン (片道 ms、0 で中止)
     TURN_KEYS = ("whead", "wheadth", "thalf")   # v0.13.6: まっすぐ補正・旋回の片道
+    TOFF_KEYS = ("toffclr",)       # v0.13.9: 覚えた左右の距離を消す
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
@@ -873,6 +874,8 @@ class Hub:
             raise RuntimeError("本体のファームを v0.13.5 以上にしてください (旋回スキャン)")
         if any(k in opt for k in self.TURN_KEYS) and not self.link.fw_at_least(0, 13, 6):
             raise RuntimeError("本体のファームを v0.13.6 以上にしてください (旋回・まっすぐ補正)")
+        if any(k in opt for k in self.TOFF_KEYS) and not self.link.fw_at_least(0, 13, 9):
+            raise RuntimeError("本体のファームを v0.13.9 以上にしてください (旋回の覚え書き)")
         def val(k, v):
             if k == "hako":
                 return v if v in ("auto", "on", "off") else ("on" if v is True else "off" if v is False else "auto")
@@ -881,7 +884,7 @@ class Hub:
             if isinstance(v, (int, float)):
                 return str(int(v))
             raise ValueError(f"{k} の値が変です")
-        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS + self.PULSE_KEYS + self.SCAN_KEYS + self.TURN_KEYS if k in opt]
+        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS + self.PULSE_KEYS + self.SCAN_KEYS + self.TURN_KEYS + self.TOFF_KEYS if k in opt]
         if not items:
             raise ValueError("設定がありません")
         return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)
