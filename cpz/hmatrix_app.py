@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.4"
+VERSION = "0.13.5"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -768,7 +768,8 @@ class App:
                 "wdec": ("止まる時のゆっくり", f"{w['dec'] / 1000:.1f}秒" if "dec" in w else "要v0.13.3"),
                 "wacc": ("動き出しのゆっくり", f"{w['acc'] / 1000:.1f}秒" if "acc" in w else "要v0.13.3"),
                 "yawzero": ("向きを0に", "ENTER"),
-                "whead": ("まっすぐ補正", ("入" if w.get("head") else "切") if "head" in w else "要v0.13.6"),
+                "whead": ("まっすぐ補正", (("入" + (f" 直した{w['hfixes']}回" if w.get("hfixes") else "")) if w.get("head") else "切")
+                          if "head" in w else "要v0.13.6"),
                 "wheadth": ("補正を始めるずれ", f"{w.get('hth', 10)}°" if "hth" in w else "-"),
                 "thalf": ("旋回の片道", f"{w.get('thalf', 350)}ms" if "thalf" in w else "-"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),

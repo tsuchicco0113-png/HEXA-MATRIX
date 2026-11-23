@@ -102,6 +102,49 @@ int main() {
     HxmTurn t; t.command(1, 1, 0); t.until = 0; assert(t.tick(10, 0) == 0 && !t.active());   // 期限切れで止まる
     puts("turn ok");
   }
+  {   // v0.13.8: まっすぐ補正。歩くと −4°/s で時計回りにずれ、一歩ごとに ±3° 揺れる機体を 40 秒歩かせる
+    HxmHead h; HxmTurn t; t.half = 350;
+    auto rateAt = [](float c) {
+      static const float r[8] = {-28, 86, 78, -86, -161, -15, 200, -33};
+      float k = c / 0.0525f; k -= 8.f * floorf(k / 8.f);
+      int i = (int)k; float f = k - i;
+      return (r[i] * (1 - f) + r[(i + 1) % 8] * f) / 3.5f;
+    };
+    float crank = 0.f, center = 0.f, base = 0.f, maxE = 0.f;
+    int reversals = 0; int8_t lastDir = 0; uint32_t walkMs = 0;
+    for (uint32_t now = 0; now < 40000; now += 10) {
+      float wob = 3.f * sinf(now * 0.00628f);              // 1 Hz の揺れ
+      float yaw = base + wob;
+      int8_t hd = h.tick(now, yaw, true, 10, true, 0);
+      if (hd) {
+        if (lastDir && hd != lastDir) reversals++;
+        if (!t.active() || t.dir != hd) t.command(hd, 50, now); else t.command(hd, 50, now);
+        int o = t.tick(now, yaw);
+        crank += o * 0.01f * 0.003f;
+        center += (crank - center) * 0.05f;
+        base += rateAt(center) * 0.01f;
+      } else {
+        if (t.active()) t.command(0, 1, now);
+        crank += 0.6f * 0.003f;                            // 60% で歩く
+        center = crank;
+        base += -4.f * 0.01f;
+        walkMs += 10;
+      }
+      if (!hd) lastDir = 0; else lastDir = hd;
+      if (now > 2000) { float e = fabsf(base); if (e > maxE) maxE = e; }
+    }
+    printf("head: fixes %u giveups %u reversals %d max error %.0f walk %.0f%%\n", (unsigned)h.fixes, (unsigned)h.giveups,
+           reversals, maxE, walkMs / 400.f);
+    assert(h.giveups == 0 && reversals == 0);
+    assert(maxE < 40.f);                 // しきい値 10° + 揺れ + 平均の遅れ + 位相を探す間に逆へ回る分
+    assert(walkMs > 40000 * 0.5);        // 半分以上の時間は歩いている
+    // 止まったら補正はしない / 歩き直すと基準を取り直す
+    assert(h.tick(50000, 90.f, true, 10, false, 0) == 0 && !h.fix);
+    assert(h.tick(50010, 90.f, true, 10, true, 50000) == 0);
+    assert(h.tick(50700, 90.f, true, 10, true, 50000) == 0 && h.refOk && fabsf(h.ref - 90.f) < 0.5f);
+    assert(h.tick(50710, 120.f, false, 10, true, 50000) == 0);   // 補正を切ったら何もしない
+    puts("head ok");
+  }
   uint16_t r[16];
   for (int f = 1; f < HXW_FACE_N; f++) { hxm_walk_face(r, f, f == 2 ? 1 : f == 3 ? -1 : 0, 500); show(r); }
   puts("walk ok");

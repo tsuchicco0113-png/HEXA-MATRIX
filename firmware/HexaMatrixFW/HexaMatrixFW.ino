@@ -101,6 +101,9 @@
 //            まっすぐ補正 (whead / wheadth): 歩いている間に向きがしきい値よりずれたら、止まって旋回で戻してから歩き続ける
 //   v0.13.7: 旋回の位相の探し方を直す (実機で左回りが「探し直し」をくり返した)。当たりをつかんだら動かさず、回る量が
 //            減ってきた時だけ少し直す (直す向きを覚える)。見失ったら近くを前後に探す。片道の既定を 350ms に
+//   v0.13.8: まっすぐ補正の見直し: ずれは 0.5 秒平均で判定 (一歩ごとの揺れで動き出さない)、戻す途中で逆向きに切り替えない、
+//            8 秒で戻せなければ今の向きを基準にしてあきらめる、補正の旋回中に WALK が来てもサーボへ歩きの値を書かない。
+//            旋回は逆へ 5° 回り出したら往復の途中でも位相を送る
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -123,7 +126,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.7";
+static const char* FW_VER = "0.13.8";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -164,9 +167,7 @@ static HxmTurn    turn;
 static bool       cfgHead = false;      // まっすぐ補正
 static uint8_t    cfgHeadTh = 10;       // しきい値 (°)
 static bool       headFix = false;      // いま補正の旋回中
-static float      headRef = 0.f;
-static bool       headRefOk = false;
-static uint32_t   headMoveAt = 0, headFixAt = 0;
+static HxmHead    head;
 static bool       cfgWalkChar = false; // おまかせの顔を箱庭のキャラにする
 static bool       wchOn = false;       // 歩行中にキャラを動かしている
 static bool       wchReady = false;    // キャラを用意した (起動してから1回)
@@ -374,12 +375,12 @@ static void sendStatus() {
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
               "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u,"
               "\"scan\":{\"st\":%u,\"half\":%u,\"n\":%d,\"r\":[%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f]},"
-              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d}}\n",
+              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d,\"hfixes\":%lu,\"hgive\":%lu}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
               wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff,
               scanSt, scanHalf, scanTrial, scanRes[0], scanRes[1], scanRes[2], scanRes[3], scanRes[4], scanRes[5], scanRes[6], scanRes[7],
-              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0);
+              turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0, (unsigned long)head.fixes, (unsigned long)head.giveups);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -944,7 +945,7 @@ static void handleWalk() {
   if (walk.moving) wchPace = walk.spd > 0 ? 1 : -1;   // 後退はキャラも逆向き
   (void)prevSpd;
   if (was && !walk.moving) walkIdleAt = now;
-  walkOut(now);                                       // v0.13.3: 速さは walkOut でゆっくり寄せる
+  if (!turn.active()) walkOut(now);                   // v0.13.3: 速さは walkOut でゆっくり寄せる (v0.13.8: 補正の旋回中は書かない)
   walkDraw(now);
 }
 /// v0.13.3: 出す速さを指令へゆっくり寄せてサーボへ (同じ値なら書かない)
@@ -971,20 +972,14 @@ static void walkTick(uint32_t now) {
   }
   if (scanSt == 1) { scanTick(now); walk.rampAt = now; return; }   // v0.13.5: スキャン中はスキャンだけ
   if (walk.tick(now)) walkIdleAt = now;               // 期限切れ: 指令を 0 に (速さは walkOut でゆっくり落とす)
-  // v0.13.6: まっすぐ補正。歩き始め (向きを変えた時) から 0.6 秒後の向きを基準に、ずれたら旋回で戻す
-  if (cfgHead && walk.moving && !headFix && !(turn.active())) {
-    if (walk.moveAt != headMoveAt) { headMoveAt = walk.moveAt; headRefOk = false; }
-    if (!headRefOk && (int32_t)(now - walk.moveAt) > 600) { headRef = yawDeg; headRefOk = true; }
-    if (headRefOk && fabsf(yawDeg - headRef) > cfgHeadTh) {
-      headFix = true; headFixAt = now;
-      turn.command(yawDeg > headRef ? -1 : 1, 50, now); walk.halt();
-    }
-  }
-  if (headFix) {
-    float e = yawDeg - headRef;
-    bool done = fabsf(e) < 2.f || (int32_t)(now - headFixAt) > 8000 || !walk.moving || !cfgHead;
-    if (done) { headFix = false; turn.command(0, 1, now); walk.halt(); walk.rampAt = now; }
-    else turn.command(e > 0 ? -1 : 1, 50, now);
+  // まっすぐ補正 (v0.13.8: HxmHead に移してテスト。揺れは 0.5 秒平均で見る・戻す時に逆へ切り替えない・8 秒であきらめる)
+  {
+    bool manualTurn = turn.active() && !headFix;      // ←→ の旋回中は補正しない
+    int8_t hd = head.tick(now, yawDeg, cfgHead && !manualTurn, cfgHeadTh, walk.moving, walk.moveAt);
+    bool was = headFix;
+    headFix = hd != 0;
+    if (headFix) { turn.command(hd, 50, now); if (!was) walk.halt(); }
+    else if (was) { turn.command(0, 1, now); walk.halt(); walk.rampAt = now; }
   }
   if (turn.active()) {                                // 旋回: 全力で往復 (wmax は無視)
     HxmWalkCfg full = wcfg; full.maxPct = 100;

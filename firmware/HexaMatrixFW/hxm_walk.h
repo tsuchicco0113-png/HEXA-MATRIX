@@ -136,6 +136,7 @@ struct HxmTurn {
   uint8_t  bad = 0;            // 続けて外れたブロック数
   uint32_t at = 0;
   float    y0 = 0.f, prevD = -1000.f;
+  float    earlyDeg = 5.f;      // v0.13.8: これだけ逆へ回ったらブロックの途中でも位相を送る
   float    goodDeg = 15.f;     // 2 往復 (片道 350ms なら 1.4 秒) でこれだけ狙った向きに回れば当たり
   uint32_t blocks = 0, sends = 0, nudges = 0;
 
@@ -206,6 +207,13 @@ struct HxmTurn {
         ph = 1; swing = 0; at = now; y0 = yaw; nudge = 0;
         return 100;
       case 1:
+        if (!warm && (yaw - y0) * dir < -earlyDeg) {          // v0.13.8: 逆へ大きく回り出したら待たずに位相を送る
+          float d = (yaw - y0) * dir;
+          y0 = yaw; swing = 0; at = now;
+          if (locked) { locked = false; bad = 0; prevD = -1000.f; around = 0; }
+          judge(d);
+          return ph == 2 ? (sendDir > 0 ? 100 : -100) : 100;
+        }
         if (el < strokeMs()) return (swing & 1) ? -100 : 100;
         swing++; at = now;
         if (warm && swing >= 2) { warm = false; swing = 0; y0 = yaw; return 100; }
@@ -221,6 +229,41 @@ struct HxmTurn {
         ph = 1; swing = 0; at = now; y0 = yaw; nudge = 0; warm = true;
         return 100;
     }
+  }
+};
+
+// ---------------------------------------------------------------- まっすぐ補正 (v0.13.8)
+//   歩き始め (向きを変えた時) から 0.6 秒後の向きを覚え、ずれがしきい値を超えたら止まって旋回で戻す。
+//   - ずれは 0.5 秒の平均で見る (一歩ごとの揺れで動き出さない)
+//   - 戻す間は生の向きで見て、基準を越えたら (1° 手前で) やめる。逆向きに切り替えない (行ったり来たりしない)
+//   - 8 秒で戻せなかったら、いまの向きを新しい基準にしてあきらめる (止まって回るのをくり返さない)
+struct HxmHead {
+  bool     fix = false, refOk = false;
+  float    ref = 0.f, yf = 0.f;
+  int8_t   fixDir = 0;
+  uint32_t moveAt = 0, fixAt = 0, lastAt = 0;
+  uint32_t fixes = 0, giveups = 0;
+  /// 戻り値: 0 = ふつうに歩く / ±1 = この向きに旋回して戻す (+ 左 / − 右、ヨー角の + の向き)
+  int8_t tick(uint32_t now, float yaw, bool on, uint8_t th, bool moving, uint32_t mvAt) {
+    float dt = lastAt ? (float)(uint32_t)(now - lastAt) : 0.f;
+    lastAt = now;
+    if (!on || !moving) { fix = false; refOk = false; yf = yaw; return 0; }
+    if (mvAt != moveAt) { moveAt = mvAt; refOk = false; fix = false; yf = yaw; }
+    float k = dt / 500.f; if (k > 1.f) k = 1.f;
+    yf += (yaw - yf) * k;
+    if (!refOk) {
+      if ((int32_t)(now - mvAt) > 600) { ref = yf; refOk = true; }
+      return 0;
+    }
+    if (!fix) {
+      float e = yf - ref;
+      if (e < (float)th && e > -(float)th) return 0;
+      fix = true; fixAt = now; fixDir = e > 0 ? -1 : 1; fixes++;
+    }
+    float e = yaw - ref;
+    if (fixDir < 0 ? e <= 1.f : e >= -1.f) { fix = false; yf = yaw; return 0; }      // 戻った
+    if ((int32_t)(now - fixAt) > 8000) { fix = false; ref = yaw; yf = yaw; giveups++; return 0; }
+    return fixDir;
   }
 };
 
