@@ -312,7 +312,7 @@ Wi-Fi (TCP 7800) でも同じパケット・同じ返事です。
 歩く・旋回は止めない (顔の上に重ねて、終わったら顔に戻る)。
 - アケコン: 歩く → 設定 → アケコン → 「波動拳 (音+HIT)」「昇竜拳 (音+HIT)」に好きなボタンを覚えさせる
 - CPZ のキー: 歩くの操作画面で Z = 波動拳、X = 昇竜拳 (同じキーのプログラムがあればそちらが先)
-- 音: `~/.config/hexa-matrix/sounds/hadou.wav` と `shoryu.wav` (mp3 でも可、mpg123 か ffplay が要る)。**音のファイルはリポジトリに入れない**ので各自で置く。無ければ絵だけ出る
+- 音: `~/.config/hexa-matrix/sounds/hadou.wav` と `shoryu.wav`。CPZ は PipeWire がスピーカーを掴んでいるので pw-play (無ければ paplay → aplay) で鳴らす。`HMATRIX_SOUND_CMD` で鳴らし方を変えられる。**音のファイルはリポジトリに入れない**ので各自で置く。無ければ絵だけ出る
 - 絵は `cpz/hmatrix_fx.py` で点を打って作っている (`python3 cpz/hmatrix_fx.py` で文字の絵が見られる)。足すのは `EFFECTS` に 1 行
 - 通信: FX (0x09) = `[1コマ ms/10][最後のコマを残す ms/10][絵 32 バイト × 1〜7]`。API: `POST /api/fx {"name":"hadou"}`、`GET /api/status` の `fx`
 - install.sh をやり直すとサービスに `audio` グループが付く (スピーカーを鳴らすため)

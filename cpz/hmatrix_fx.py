@@ -151,6 +151,15 @@ def sound_path(name):
 
 
 def _player(path):
+    # CPZ は PipeWire がスピーカー (ES8389) を掴んでいるので、aplay で直接は開けない (busy / 既定は HDMI で 524)。
+    # PipeWire 経由 (pw-play / paplay) を先に使う。HMATRIX_SOUND_CMD="aplay -D plughw:1,0" のように指定もできる
+    cmd = os.environ.get("HMATRIX_SOUND_CMD")
+    if cmd:
+        return cmd.split() + [path]
+    if shutil.which("pw-play"):
+        return ["pw-play", path]
+    if shutil.which("paplay"):
+        return ["paplay", path]
     if path.endswith(".wav") and shutil.which("aplay"):
         return ["aplay", "-q", path]
     if shutil.which("mpg123"):
@@ -160,6 +169,16 @@ def _player(path):
     if shutil.which("aplay"):
         return ["aplay", "-q", path]
     return None
+
+
+def _sound_env():
+    """サービス (systemd) から動かすと XDG_RUNTIME_DIR が無く、ログイン中の PipeWire に届かない → 足す"""
+    env = dict(os.environ)
+    if not env.get("XDG_RUNTIME_DIR"):
+        d = f"/run/user/{os.getuid()}"
+        if os.path.isdir(d):
+            env["XDG_RUNTIME_DIR"] = d
+    return env
 
 
 class Fx:
@@ -194,7 +213,7 @@ class Fx:
                     if self.proc and self.proc.poll() is None:      # 前の音は切って新しい音を (連打で重ならない)
                         self.proc.kill()
                     try:
-                        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_sound_env())
                     except OSError as e:
                         self.log(f"fx: 音を鳴らせません: {e}")
                         snd = None
