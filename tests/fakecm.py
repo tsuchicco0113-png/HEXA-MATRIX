@@ -66,6 +66,9 @@ def walk_now():
     if fwv() >= (0, 13, 5): WALK.setdefault("scan", {"st": 0, "half": 250, "n": 0, "r": [0] * 8})
     if fwv() >= (0, 13, 6):
         for k, v in (("turn", 0), ("thalf", 250), ("head", 0), ("hth", 10), ("hfix", 0), ("tsend", 0)): WALK.setdefault(k, v)
+    if fwv() >= (0, 14, 0):
+        for k, v in (("gyro", 0 if os.environ.get("FAKE_NOGYRO") else 1), ("gdead", 0), ("tnoimu", 0), ("tgood", 15.0),
+                     ("cal", {"st": 0, "i": 0, "saved": 0, "sc": [0, 0, 0]})): WALK.setdefault(k, v)
     if WALK["spd"] and now > WALK_T[0]: WALK["spd"] = 0; WALK["us"] = 0; WALK["tmo"] += 1
     return dict(WALK)
 def names(): return sorted(FILES)
@@ -102,6 +105,11 @@ def handle(t, p):
             elif k == "whead" and fwv() >= (0, 13, 6): WALK["head"] = 1 if v[:1] in "1ot" else 0
             elif k == "wheadth" and fwv() >= (0, 13, 6): WALK["hth"] = max(3, min(60, int(v)))
             elif k == "thalf" and fwv() >= (0, 13, 6): WALK["thalf"] = max(100, min(800, int(v)))
+            elif k == "tcal" and fwv() >= (0, 14, 0):
+                if not WALK["gyro"]: WALK["cal"]["st"] = 4
+                elif v[:1] in "1ot": WALK["cal"] = {"st": 2, "i": 3, "saved": 1, "sc": [0, 46, 27]}; WALK["thalf"] = 350; WALK["tgood"] = 12.9; WALK["toff"] = -9999
+                else: WALK["cal"]["st"] = 3
+            elif k == "tcalclr" and fwv() >= (0, 14, 0): WALK["cal"]["saved"] = 0; WALK["thalf"] = 350; WALK["tgood"] = 15.0
             elif k == "tscan" and fwv() >= (0, 13, 5):
                 WALK["scan"] = {"st": 2 if int(v) > 0 else 3, "half": int(v) or 250, "n": 8,
                                 "r": [12, -3, 40, 85, 20, -15, -60, -25]}
@@ -123,6 +131,8 @@ def handle(t, p):
         WALK["us"] = 1500 + WALK["trim"] + ((50 + 4 * abs(WALK["spd"])) * (1 if WALK["spd"] > 0 else -1) if WALK["spd"] else 0)
         WALK_T[0] = time.monotonic() + ttl / 10; WALK["yaw"] += WALK["spd"] * 1.5 * 0.15
         tn = len(p) >= 4 and p[3] == 1 and fwv() >= (0, 13, 6)
+        if tn and fwv() >= (0, 14, 0) and not WALK.get("gyro", 1):     # ジャイロ無し: 旋回は断って止まる
+            WALK["tnoimu"] += 1 if sp else 0; WALK["spd"] = 0; WALK["us"] = 0; tn = False; sp = 0
         WALK["turn"] = (1 if sp > 0 else -1 if sp < 0 else 0) if tn else 0
         open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} WALK {sp} {ttl} {p[2]}{' TURN' if tn else ''}\n")
         return

@@ -313,6 +313,53 @@ struct HxmHead {
   }
 };
 
+// ---------------------------------------------------------------- 旋回の自動調整 (v0.14.0)
+//   片道をいくつか変えてスキャン (位相 8 点 × SCAN_SWINGS 回の片道) した結果から、左右どちらにも回れて一番速い片道を選ぶ。
+//   速さ = min(左回りの最大, 右回りの最大) ÷ スキャン 1 回の往復時間 [°/秒]
+//   goodDeg = 選んだ片道の min(左右の最大) × 0.08 (8〜30°)。実機 350ms (最大 +200 / −161) で 12.9°
+//   どの片道でも片方が minDeg 未満なら失敗 (idx = −1、いまの設定のまま)
+struct HxmCalPick { int idx = -1; float score = 0.f, good = 15.f, early = 5.f, worst = 0.f; };
+static inline HxmCalPick hxm_cal_pick(const float (*r)[8], const uint16_t* halves, int n, int swings, float minDeg = 20.f) {
+  HxmCalPick p;
+  for (int i = 0; i < n; i++) {
+    float L = 0.f, R = 0.f;
+    for (int k = 0; k < 8; k++) { if (r[i][k] > L) L = r[i][k]; if (-r[i][k] > R) R = -r[i][k]; }
+    float w = L < R ? L : R;
+    if (w < minDeg) continue;
+    float s = w / (swings * halves[i] / 1000.f);
+    if (s > p.score) { p.score = s; p.idx = i; p.worst = w; }
+  }
+  if (p.idx >= 0) {
+    p.good = p.worst * 0.08f;
+    if (p.good < 8.f) p.good = 8.f;
+    if (p.good > 30.f) p.good = 30.f;
+    p.early = p.good / 3.f;
+  }
+  return p;
+}
+
+// ---------------------------------------------------------------- ジャイロの見張り (v0.14.0)
+//   読めない状態が 0.5 秒、または値がまったく変わらない (固まった) 状態が 1.5 秒続いたら「死んだ」とみなす。
+//   また変わり出したら生き返る。ジャイロが無いと旋回の向きが分からないので、旋回・補正・スキャンは止める (前後に歩くのは続ける)
+struct HxmImuWatch {
+  bool     alive = true;
+  float    lx = NAN, ly = NAN, lz = NAN;
+  uint32_t okAt = 0, chAt = 0;
+  bool     started = false;
+  uint32_t deaths = 0;
+  bool tick(uint32_t now, bool ok, float gx, float gy, float gz) {
+    if (!started) { started = true; okAt = chAt = now; }
+    if (ok) {
+      okAt = now;
+      if (gx != lx || gy != ly || gz != lz) { chAt = now; lx = gx; ly = gy; lz = gz; }
+    }
+    bool a = (int32_t)(now - okAt) < 500 && (int32_t)(now - chAt) < 1500;
+    if (alive && !a) deaths++;
+    alive = a;
+    return alive;
+  }
+};
+
 // ---------------------------------------------------------------- 顔 (16x16、各行 MSB が左)
 //   純正スタックチャン (M5Stack-Avatar) の顔を 16x16 に縮めたもの:
 //   小さな黒目 2 つ (2x2、間隔 6 マス) と横一文字の口 (4 マス)。Avatar の比率 (320x240 で目 x=90/230 y=93、口 y=148) に合わせる

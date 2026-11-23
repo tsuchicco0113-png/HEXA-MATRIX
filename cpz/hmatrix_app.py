@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.7"
+VERSION = "0.13.8"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -747,7 +747,7 @@ class App:
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
     WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
-                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "toff", "tscan", "tres1", "tres2", "pad"]
+                 "wdec", "wacc", "yawzero", "whead", "wheadth", "tcal", "thalf", "toff", "tscan", "tres1", "tres2", "pad"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -772,7 +772,9 @@ class App:
                 "whead": ("まっすぐ補正", (("入" + (f" 直した{w['hfixes']}回" if w.get("hfixes") else "")) if w.get("head") else "切")
                           if "head" in w else "要v0.13.6"),
                 "wheadth": ("補正を始めるずれ", f"{w.get('hth', 10)}°" if "hth" in w else "-"),
-                "thalf": ("旋回の片道", f"{w.get('thalf', 350)}ms" if "thalf" in w else "-"),
+                "tcal": ("旋回の自動調整", self.cal_label(w)),
+                "thalf": ("旋回の片道", (f"{w.get('thalf', 350)}ms" + (f" 当たり{w['tgood']:.0f}°" if "tgood" in w else ""))
+                          if "thalf" in w else "-"),
                 "toff": ("左右の当たりの距離", (f"{w['toff']}ms (ENTERで消す)" if w.get("toff", -9999) > -9999 else "まだ")
                          if "toff" in w else "要v0.13.9"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),
@@ -786,6 +788,19 @@ class App:
         if pd is None:
             return "要ハブ v0.13.7"
         return (pd.get("name") or "つながっている")[:14] if pd.get("connected") else "未接続"
+
+    def cal_label(self, w):
+        c = w.get("cal")
+        if c is None:
+            return "要v0.14"
+        st = c.get("st", 0)
+        if st == 1:
+            sc = w.get("scan") or {}
+            return f"調整中 {min(3, c.get('i', 0) + 1)}/3 ({sc.get('n', 0)}/8)"
+        if not w.get("gyro", 1) or st == 4:
+            return "ジャイロなし"
+        return {2: "済み ENTERでやり直し", 3: "中止 ENTERでやり直し", 5: "回れる片道なし"}.get(
+            st, "済み" if c.get("saved") else "未調整 ENTERで開始")
 
     def scan_label(self, w):
         sc = w.get("scan")
@@ -864,6 +879,8 @@ class App:
             d.text((140, 128), f"電池 {dv.get('lvl', '?')}%", fill=SUB, font=self.font_t)
         if w.get("pin", -1) < 0 or not w.get("walker"):
             d.text((140, 140), "TABで設定を", fill=NGC, font=self.font_t)
+        elif "gyro" in w and not w.get("gyro"):              # v0.14.0: ジャイロが死んだ → 前後だけ
+            d.text((140, 140), "ジャイロなし: 前後のみ", fill=NGC, font=self.font_t)
         # 右: プログラム (キー + 名前)。動いているものは進み具合
         x0, y = 212, 22
         d.text((x0, y), "プログラム", fill=ACC, font=self.font_t); y += 13
@@ -1127,6 +1144,13 @@ class App:
             cfgcall({"whead": on}, f"まっすぐ補正: 向きが {w.get('hth', 10)}° ずれたら止まって戻します" if on else "まっすぐ補正を切りました")
         elif key == "wheadth" and "hth" in w:
             cfgcall({"wheadth": max(3, min(60, int(w.get("hth", 10)) + step * (5 if int(w.get("hth", 10)) >= 10 else 1)))})
+        elif key == "tcal" and "cal" in w and val == "ENTER":   # v0.14.0: 旋回の自動調整
+            if (w.get("cal") or {}).get("st") == 1:
+                cfgcall({"tcal": False}, "自動調整をやめました")
+            elif not w.get("gyro", 1):
+                self.toast("ジャイロが読めないので調整できません", 3, ok=False)
+            else:
+                cfgcall({"tcal": True}, "床に置いて約2分。片道を3通り試して、左右とも一番回れるのを選びます (歩く操作でやめる)")
         elif key == "thalf" and "thalf" in w:
             cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 350)) + step * 50))})
         elif key == "pad" and val == "ENTER":

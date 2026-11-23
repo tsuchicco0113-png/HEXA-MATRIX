@@ -104,6 +104,11 @@
 //   v0.13.8: まっすぐ補正の見直し: ずれは 0.5 秒平均で判定 (一歩ごとの揺れで動き出さない)、戻す途中で逆向きに切り替えない、
 //            8 秒で戻せなければ今の向きを基準にしてあきらめる、補正の旋回中に WALK が来てもサーボへ歩きの値を書かない。
 //            旋回は逆へ 5° 回り出したら往復の途中でも位相を送る
+//   v0.14.0: 旋回の自動調整 (CONFIG tcal=1)。片道 250/350/450ms で 3 回スキャンし、左右どちらにも回れて一番速い片道と
+//            当たりの角度 (goodDeg) を選んで本体に保存 (thalf / tgood)。サーボやクランクを替えた時、別の個体でもそのまま回れる。
+//            起動時には勝手に動かさない (机の上から落ちる)。ジャイロの見張り: 読めない 0.5 秒 / 値が固まって 1.5 秒で
+//            「ジャイロなし」とみなし、旋回・まっすぐ補正・スキャンは止めて前後に歩くのだけ続ける (FS90R は位置が読めないので
+//            ジャイロ無しでは旋回の向きが決まらない。時間だけで回すと逆へ回ったり回らなかったりするので、やらない)
 //   v0.13.9: 旋回の位置の覚え書き: 左右を続けて切り替える時は前に回れた所へ直接行く。左の当たりと右の当たりの距離を覚えて
 //            本体に保存し (toff)、探している最中に逆の当たりにいると分かったらその距離だけ一気に送る (左回りの立ち上がりを速く)
 #include <M5Unified.h>
@@ -128,7 +133,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.9";
+static const char* FW_VER = "0.14.0";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -167,6 +172,17 @@ static float      scanYaw0 = 0.f, scanRes[SCAN_N];
 // v0.13.6: その場旋回とまっすぐ補正
 static HxmTurn    turn;
 static bool       cfgHead = false;      // まっすぐ補正
+// v0.14.0: 旋回の自動調整とジャイロの見張り
+static HxmImuWatch imuWatch;
+static bool       yawOk = false;        // ジャイロで向きが分かる (imuOk かつ見張りが生きている)
+static uint32_t   turnNoImu = 0;        // ジャイロ無しで断った旋回の数
+static const int  CAL_N = 3;
+static const uint16_t CAL_HALVES[CAL_N] = {250, 350, 450};
+static uint8_t    calSt = 0;            // 0 なし / 1 実行中 / 2 済み / 3 中止 / 4 ジャイロなし / 5 回れる片道が無い
+static int8_t     calI = 0;
+static float      calR[CAL_N][8];
+static float      calScore[CAL_N];
+static bool       calSaved = false;     // 調整した値が保存されている
 static uint8_t    cfgHeadTh = 10;       // しきい値 (°)
 static bool       headFix = false;      // いま補正の旋回中
 static HxmHead    head;
@@ -377,13 +393,16 @@ static void sendStatus() {
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
               "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u,"
               "\"scan\":{\"st\":%u,\"half\":%u,\"n\":%d,\"r\":[%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f]},"
-              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d,\"hfixes\":%lu,\"hgive\":%lu,\"toff\":%d,\"tjump\":%lu}}\n",
+              "\"turn\":%d,\"thalf\":%u,\"head\":%d,\"hth\":%u,\"hfix\":%d,\"tsend\":%lu,\"tlock\":%d,\"hfixes\":%lu,\"hgive\":%lu,\"toff\":%d,\"tjump\":%lu,"
+              "\"gyro\":%d,\"gdead\":%lu,\"tnoimu\":%lu,\"tgood\":%.1f,\"cal\":{\"st\":%u,\"i\":%d,\"saved\":%d,\"sc\":[%.0f,%.0f,%.0f]}}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
               wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff,
               scanSt, scanHalf, scanTrial, scanRes[0], scanRes[1], scanRes[2], scanRes[3], scanRes[4], scanRes[5], scanRes[6], scanRes[7],
               turn.dir, turn.half, cfgHead ? 1 : 0, cfgHeadTh, headFix ? 1 : 0, (unsigned long)turn.sends, turn.locked ? 1 : 0, (unsigned long)head.fixes, (unsigned long)head.giveups,
-              turn.offsetOk ? (int)lroundf(turn.offset) : -9999, (unsigned long)turn.jumps);
+              turn.offsetOk ? (int)lroundf(turn.offset) : -9999, (unsigned long)turn.jumps,
+              yawOk ? 1 : 0, (unsigned long)imuWatch.deaths, (unsigned long)turnNoImu, turn.goodDeg,
+              calSt, calI, calSaved ? 1 : 0, calScore[0], calScore[1], calScore[2]);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -857,6 +876,7 @@ static void scanTick(uint32_t now) {
 }
 static void scanStart(uint16_t half) {
   if (!cfgWalker || wcfg.pin < 0) return;
+  if (!yawOk) { scanSt = 4; return; }                  // v0.14.0: ジャイロが無いと測れない
   scanHalf = half < 100 ? 100 : half > 800 ? 800 : half;
   for (int i = 0; i < SCAN_N; i++) scanRes[i] = 0.f;
   scanTrial = 0; scanPhase = 0; scanAt = millis(); scanSt = 1;
@@ -871,6 +891,7 @@ static void walkPower() {
 /// 止める。hide=true なら顔も消す (番組・ライブ・消灯へ移る時)
 static void walkStop(bool hide) {
   scanStop(3);
+  if (calSt == 1) calSt = 3;
   turn.command(0, 1, millis()); headFix = false;
   if (walk.moving || walk.pulsing) {
     walk.command(0, 5, 0xFF, millis());
@@ -926,6 +947,7 @@ static void handleWalk() {
   if (pk->len != 3 && pk->len != 4) { sendErr("walk len"); return; }
   uint32_t now = millis();
   scanStop(3);                                       // v0.13.5: 歩く指令が来たらスキャンはやめる
+  if (calSt == 1) calSt = 3;                         // v0.14.0: 自動調整も
   if (!walkShow) {                                   // 番組・ライブ・一時再生は止めて顔へ
     stopProgramForExternal();
     live = false; clipMode = false; needRestore = false; holdUntil = 0;
@@ -936,6 +958,11 @@ static void handleWalk() {
     if (pk->buf[2] != 0xFF) walk.face = pk->buf[2];
     walk.command(0, pk->buf[1], 0xFF, now);          // 歩くのはやめる (パルスは旋回が出す)
     headFix = false;
+    if (!yawOk) {                                    // v0.14.0: ジャイロ無しでは向きが決まらない → 止まったまま
+      if (sp) turnNoImu++;
+      turn.command(0, 1, now); walkOut(now); walkDraw(now);
+      return;
+    }
     turn.command(sp > 0 ? 1 : sp < 0 ? -1 : 0, pk->buf[1], now);
     if (turn.active()) { walk.pulsing = true; walk.halt(); }
     walkDraw(now);
@@ -952,6 +979,35 @@ static void handleWalk() {
   walkDraw(now);
 }
 /// v0.13.3: 出す速さを指令へゆっくり寄せてサーボへ (同じ値なら書かない)
+/// v0.14.0: 自動調整の 1 段。いまのスキャンが終わったら結果をしまって次の片道へ。3 つ終わったら選んで保存
+static void calStep(uint32_t now) {
+  if (scanSt == 3) { calSt = 3; return; }
+  if (scanSt == 4) { calSt = 4; return; }
+  if (scanSt == 2 && calI < CAL_N) {
+    for (int k = 0; k < 8; k++) calR[calI][k] = scanRes[k];
+    calI++;
+  }
+  if (calI < CAL_N) { scanStart(CAL_HALVES[calI]); return; }
+  HxmCalPick p = hxm_cal_pick(calR, CAL_HALVES, CAL_N, SCAN_SWINGS);
+  for (int i = 0; i < CAL_N; i++) {
+    HxmCalPick q = hxm_cal_pick(&calR[i], &CAL_HALVES[i], 1, SCAN_SWINGS);
+    calScore[i] = q.score;
+  }
+  if (p.idx < 0) { calSt = 5; return; }
+  turn.half = CAL_HALVES[p.idx]; turn.goodDeg = p.good; turn.earlyDeg = p.early;
+  prefs.putUShort("thalf", turn.half); prefs.putFloat("tgood", turn.goodDeg);
+  turn.offsetOk = false; turn.forget(); prefs.remove("toff");     // 片道が変わると左右の距離も変わる → 覚え直す
+  calSaved = true; calSt = 2;
+  (void)now;
+}
+static void calStart() {
+  if (!cfgWalker || wcfg.pin < 0) return;
+  if (!yawOk) { calSt = 4; return; }
+  calI = 0; calSt = 1;
+  for (int i = 0; i < CAL_N; i++) { calScore[i] = 0.f; for (int k = 0; k < 8; k++) calR[i][k] = 0.f; }
+  turn.command(0, 1, millis()); headFix = false;
+  scanSt = 0;
+}
 static void walkOut(uint32_t now) {
   int o = walk.ramp(now, wcfg);
   if (o) turn.forget();                               // v0.13.9: 歩いたら旋回の覚えた位置は分からなくなる
@@ -965,7 +1021,9 @@ static void walkTick(uint32_t now) {
   if (cfgWalker && imuOk && (int32_t)(now - yawAt) >= 10) {
     float ax, ay, az, gx, gy, gz;
     M5.Imu.update();
-    if (M5.Imu.getAccel(&ax, &ay, &az) && M5.Imu.getGyro(&gx, &gy, &gz)) {
+    bool rd = M5.Imu.getAccel(&ax, &ay, &az) && M5.Imu.getGyro(&gx, &gy, &gz);
+    imuWatch.tick(now, rd, gx, gy, gz);
+    if (rd) {
       float dt = yawAt ? (now - yawAt) / 1000.f : 0.f;
       if (dt > 0.2f) dt = 0.f;
       yawRate = hxm_yaw_rate(ax, ay, az, gx, gy, gz);
@@ -974,12 +1032,20 @@ static void walkTick(uint32_t now) {
     }
     yawAt = now;
   }
+  yawOk = imuOk && imuWatch.alive;
+  if (!yawOk) {                                       // v0.14.0: ジャイロが死んだ → 旋回・補正・スキャンをやめる
+    if (scanSt == 1) scanStop(4);
+    if (calSt == 1) calSt = 4;
+    if (turn.active()) { turn.command(0, 1, now); walk.command(0, 5, 0xFF, now); }
+    headFix = false;
+  }
+  if (calSt == 1 && scanSt != 1) calStep(now);         // v0.14.0: 自動調整 (スキャンを 3 回)
   if (scanSt == 1) { scanTick(now); walk.rampAt = now; return; }   // v0.13.5: スキャン中はスキャンだけ
   if (walk.tick(now)) walkIdleAt = now;               // 期限切れ: 指令を 0 に (速さは walkOut でゆっくり落とす)
   // まっすぐ補正 (v0.13.8: HxmHead に移してテスト。揺れは 0.5 秒平均で見る・戻す時に逆へ切り替えない・8 秒であきらめる)
   {
     bool manualTurn = turn.active() && !headFix;      // ←→ の旋回中は補正しない
-    int8_t hd = head.tick(now, yawDeg, cfgHead && !manualTurn, cfgHeadTh, walk.moving, walk.moveAt);
+    int8_t hd = head.tick(now, yawDeg, cfgHead && !manualTurn && yawOk, cfgHeadTh, walk.moving, walk.moveAt);
     bool was = headFix;
     headFix = hd != 0;
     if (headFix) { turn.command(hd, 50, now); if (!was) walk.halt(); }
@@ -1019,6 +1085,7 @@ static void loadWalkCfg() {
   cfgHead   = prefs.getBool("whd", false);
   cfgHeadTh = prefs.getUChar("whth", 10);
   turn.half = prefs.getUShort("thalf", 350);
+  { float g = prefs.getFloat("tgood", NAN); if (!isnan(g) && g >= 3.f && g <= 60.f) { turn.goodDeg = g; turn.earlyDeg = g / 3.f; calSaved = true; } }
   { float o = prefs.getFloat("toff", NAN); if (!isnan(o)) { turn.offset = o; turn.offsetOk = true; } }
   cfgWalkChar = prefs.getBool("wch", false);
 }
@@ -1138,6 +1205,9 @@ static void handleConfig() {
       else if (!strcmp(k, "wheadth")) { int n = atoi(v); cfgHeadTh = (uint8_t)(n < 3 ? 3 : n > 60 ? 60 : n); prefs.putUChar("whth", cfgHeadTh); }
       else if (!strcmp(k, "toffclr")) { turn.offsetOk = false; turn.forget(); prefs.remove("toff"); }
       else if (!strcmp(k, "thalf")) { int n = atoi(v); turn.half = (uint16_t)(n < 100 ? 100 : n > 800 ? 800 : n); prefs.putUShort("thalf", turn.half); }
+      else if (!strcmp(k, "tcal")) { if (on) calStart(); else if (calSt == 1) { calSt = 3; scanStop(3); } }
+      else if (!strcmp(k, "tcalclr")) { turn.half = 350; turn.goodDeg = 15.f; turn.earlyDeg = 5.f; calSaved = false;
+                                         prefs.remove("tgood"); prefs.putUShort("thalf", 350); }
       else if (!strcmp(k, "tscan")) { int n = atoi(v); if (n > 0) scanStart((uint16_t)n); else scanStop(3); }
       else if (!strcmp(k, "won"))  { int n = atoi(v); wcfg.pulseOn  = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("won", wcfg.pulseOn); }
       else if (!strcmp(k, "woff")) { int n = atoi(v); wcfg.pulseOff = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("woff", wcfg.pulseOff); }

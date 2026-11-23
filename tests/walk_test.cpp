@@ -188,6 +188,32 @@ int main() {
     assert(h.tick(50710, 120.f, false, 10, true, 50000) == 0);   // 補正を切ったら何もしない
     puts("head ok");
   }
+  {  // v0.14.0: 旋回の自動調整
+    const uint16_t hv[3] = {250, 350, 450};
+    float rr[3][8] = {{10, -12, 30, -9, 5, 18, -14, 3},              // 250: 左右とも弱い → 失格
+                      {-28, 86, 78, -86, -161, -15, 200, -33},       // 350: 実機の値 (min 161 / 3.5 秒 = 46°/s)
+                      {40, 220, 60, -50, -120, 10, 150, -30}};       // 450: 右が 120 / 4.5 秒 = 27°/s
+    HxmCalPick p = hxm_cal_pick(rr, hv, 3, 10);
+    assert(p.idx == 1 && fabsf(p.worst - 161.f) < 0.1f && fabsf(p.good - 12.88f) < 0.05f && p.early > 4.f && p.early < 4.5f);
+    float bad[1][8] = {{0, 0, 0, 0, 0, 0, 0, 0}};
+    assert(hxm_cal_pick(bad, hv, 1, 10).idx == -1);
+    float big[1][8] = {{900, -900, 0, 0, 0, 0, 0, 0}};
+    assert(hxm_cal_pick(big, hv, 1, 10).good == 30.f);
+    puts("cal ok");
+  }
+  {  // v0.14.0: ジャイロの見張り
+    HxmImuWatch w;
+    uint32_t t = 0;
+    for (; t < 3000; t += 10) assert(w.tick(t, true, 0.1f * (t % 70), 0.f, 0.f));     // 揺れている = 生きている
+    for (; t < 3400; t += 10) w.tick(t, false, 0, 0, 0);
+    assert(w.alive);                                                                  // 0.4 秒読めないだけなら大丈夫
+    for (; t < 3600; t += 10) w.tick(t, false, 0, 0, 0);
+    assert(!w.alive && w.deaths == 1);                                                // 0.5 秒超えたら死んだ
+    assert(w.tick(t += 10, true, 1.f, 2.f, 3.f));                                    // 読めたら生き返る
+    for (; t < 6000; t += 10) w.tick(t, true, 1.f, 2.f, 3.f);                        // 同じ値のまま 1.5 秒以上 = 固まった
+    assert(!w.alive && w.deaths == 2);
+    puts("imuwatch ok");
+  }
   uint16_t r[16];
   for (int f = 1; f < HXW_FACE_N; f++) { hxm_walk_face(r, f, f == 2 ? 1 : f == 3 ? -1 : 0, 500); show(r); }
   puts("walk ok");
