@@ -64,6 +64,43 @@ int main() {
     c3.pulseOff = 0; assert(v.ramp(2600, c3) == -50);   // 片方 0 なら刻まない
     puts("pulse ok");
   }
+  {   // v0.13.6: その場旋回。クランクの位相 (0〜1 周) によって往復で回る向きが変わる模型で、狙った向きへ回れるか
+    HxmTurn t; t.half = 250;
+    float crank = 0.40f;                 // いまの位相 (周)。0.6〜0.8 で往復すると左、0.1〜0.3 で右に回るとする
+    float yaw = 0.f;
+    auto rateAt = [](float c) {          // 往復の中心 c での回る速さ (deg/s、+ が左)
+      c -= floorf(c);
+      if (c > 0.6f && c < 0.8f) return 40.f;
+      if (c > 0.1f && c < 0.3f) return -40.f;
+      return -3.f;                       // それ以外はわずかに時計回り (この個体のくせ)
+    };
+    float center = crank;
+    t.command(+1, 50, 0);
+    uint32_t now = 0; int prev = 0;
+    for (; now < 20000; now += 10) {
+      if (now % 1000 == 0) t.command(+1, 50, now);
+      int o = t.tick(now, yaw);
+      crank += o * 0.01f * 0.004f;       // 100% で 0.4 周/秒 (= 片道 250ms で 0.1 周)
+      center += (crank - center) * 0.02f;          // 往復の中心 ≒ 位相の 0.5 秒の移動平均
+      prev = o;
+      yaw += rateAt(center) * 0.01f;
+    }
+    printf("turn left: yaw %.0f deg, sends %u\n", yaw, (unsigned)t.sends);
+    assert(yaw > 300.f);                 // 20 秒でしっかり左へ回る (位相を探してから)
+    t.command(-1, 50, now); float y1 = yaw;
+    for (uint32_t end = now + 20000; now < end; now += 10) {
+      if (now % 1000 == 0) t.command(-1, 50, now);
+      int o = t.tick(now, yaw);
+      crank += o * 0.01f * 0.004f;
+      center += (crank - center) * 0.02f;          // 往復の中心 ≒ 位相の 0.5 秒の移動平均
+      prev = o;
+      yaw += rateAt(center) * 0.01f;
+    }
+    printf("turn right: yaw %.0f deg\n", yaw - y1);
+    assert(yaw - y1 < -300.f);
+    t.until = now - 1; assert(t.tick(now + 10, yaw) == 0 && !t.active());   // 期限切れで止まる
+    puts("turn ok");
+  }
   uint16_t r[16];
   for (int f = 1; f < HXW_FACE_N; f++) { hxm_walk_face(r, f, f == 2 ? 1 : f == 3 ? -1 : 0, 500); show(r); }
   puts("walk ok");

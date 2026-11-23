@@ -64,6 +64,8 @@ def walk_now():
     if fwv() >= (0, 13, 3): WALK.setdefault("acc", 300); WALK.setdefault("dec", 900)
     if fwv() >= (0, 13, 4): WALK.setdefault("pon", 0); WALK.setdefault("poff", 0)
     if fwv() >= (0, 13, 5): WALK.setdefault("scan", {"st": 0, "half": 250, "n": 0, "r": [0] * 8})
+    if fwv() >= (0, 13, 6):
+        for k, v in (("turn", 0), ("thalf", 250), ("head", 0), ("hth", 10), ("hfix", 0), ("tsend", 0)): WALK.setdefault(k, v)
     if WALK["spd"] and now > WALK_T[0]: WALK["spd"] = 0; WALK["us"] = 0; WALK["tmo"] += 1
     return dict(WALK)
 def names(): return sorted(FILES)
@@ -97,6 +99,9 @@ def handle(t, p):
             elif k == "strim" and fwv() >= (0, 12, 0): WALK["trim"] = max(-150, min(150, int(v)))
             elif k == "wmax" and fwv() >= (0, 12, 0): WALK["max"] = max(10, min(100, int(v)))
             elif k in ("wacc", "wdec") and fwv() >= (0, 13, 3): WALK[k[1:]] = max(0, min(3000, int(v)))
+            elif k == "whead" and fwv() >= (0, 13, 6): WALK["head"] = 1 if v[:1] in "1ot" else 0
+            elif k == "wheadth" and fwv() >= (0, 13, 6): WALK["hth"] = max(3, min(60, int(v)))
+            elif k == "thalf" and fwv() >= (0, 13, 6): WALK["thalf"] = max(100, min(800, int(v)))
             elif k == "tscan" and fwv() >= (0, 13, 5):
                 WALK["scan"] = {"st": 2 if int(v) > 0 else 3, "half": int(v) or 250, "n": 8,
                                 "r": [12, -3, 40, 85, 20, -15, -60, -25]}
@@ -117,7 +122,9 @@ def handle(t, p):
         if p[2] != 0xFF: WALK["face"] = p[2]
         WALK["us"] = 1500 + WALK["trim"] + ((50 + 4 * abs(WALK["spd"])) * (1 if WALK["spd"] > 0 else -1) if WALK["spd"] else 0)
         WALK_T[0] = time.monotonic() + ttl / 10; WALK["yaw"] += WALK["spd"] * 1.5 * 0.15
-        open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} WALK {sp} {ttl} {p[2]}\n")
+        tn = len(p) >= 4 and p[3] == 1 and fwv() >= (0, 13, 6)
+        WALK["turn"] = (1 if sp > 0 else -1 if sp < 0 else 0) if tn else 0
+        open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} WALK {sp} {ttl} {p[2]}{' TURN' if tn else ''}\n")
         return
     if t == 1:
         stats["frames"] += 1; stats["last"] = p.hex(); live = True

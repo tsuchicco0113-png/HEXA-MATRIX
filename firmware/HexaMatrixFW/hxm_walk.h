@@ -118,6 +118,59 @@ struct HxmWalk {
   }
 };
 
+// ---------------------------------------------------------------- その場旋回 (v0.13.6)
+//   クランクを前後に往復させると、往復の中心 (脚の位相) によってはその場で向きが変わる (上流の実機の結果と同じ)。
+//   FS90R は位置が読めないので、ジャイロで「狙った向きに回っているか」を 2 往復ごとに見て、
+//   回っていなければ片道の半分だけ前へ送って位相をずらす (逆に大きく回っていたら 1 片道ぶん送る)。
+struct HxmTurn {
+  int8_t   dir = 0;            // +1 左 (上から見て反時計回り) / −1 右 (時計回り) / 0 しない
+  uint16_t half = 250;         // 片道 ms
+  uint32_t until = 0;          // 指令の期限
+  uint8_t  ph = 0;             // 0 落ち着く / 1 往復 / 2 位相送り
+  uint16_t sendMs = 0;         // 位相送りの長さ
+  int16_t  swing = 0;
+  uint32_t at = 0;
+  float    y0 = 0.f;
+  float    goodDeg = 4.f;      // 2 往復でこれだけ狙った向きに回れば当たり
+  uint32_t blocks = 0, sends = 0;
+
+  void command(int8_t d, uint8_t ttl, uint32_t now) {
+    if (d != dir) { dir = d; ph = 0; at = now; swing = 0; }
+    until = now + (uint32_t)(ttl ? ttl : 5) * 100u;
+  }
+  bool active() const { return dir != 0; }
+  /// 毎回。戻り値はサーボへ出す速さ % (+100 前 / −100 後 / 0)
+  int tick(uint32_t now, float yaw) {
+    if (dir && (int32_t)(now - until) > 0) dir = 0;
+    if (!dir) return 0;
+    uint32_t el = now - at;
+    switch (ph) {
+      case 0:
+        if (el < 150) return 0;
+        ph = 1; swing = 0; at = now; y0 = yaw;
+        return 100;
+      case 1:
+        if (el < half) return (swing & 1) ? -100 : 100;
+        swing++; at = now;
+        if (swing >= 4) {                                     // 2 往復ごとに当たりか見る
+          blocks++;
+          float d = (yaw - y0) * dir;
+          y0 = yaw; swing = 0;
+          if (d < goodDeg) {                                  // 回っていない / 逆に回った → 位相を送る
+            ph = 2; sends++;
+            sendMs = d < -3.f * goodDeg ? half : half / 2;
+            return 100;
+          }
+        }
+        return (swing & 1) ? -100 : 100;
+      default:                                                // 位相送り (前へ)
+        if (el < sendMs) return 100;
+        ph = 1; swing = 0; at = now; y0 = yaw;
+        return 100;
+    }
+  }
+};
+
 // ---------------------------------------------------------------- 顔 (16x16、各行 MSB が左)
 //   純正スタックチャン (M5Stack-Avatar) の顔を 16x16 に縮めたもの:
 //   小さな黒目 2 つ (2x2、間隔 6 マス) と横一文字の口 (4 マス)。Avatar の比率 (320x240 で目 x=90/230 y=93、口 y=148) に合わせる

@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 
-VERSION = "0.13.4"
+VERSION = "0.13.5"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -538,28 +538,38 @@ class Walker:
         self.lock = threading.Lock()
         self.speed = 0
         self.face = 0
+        self.turn = False            # v0.13.6: その場旋回 (速さの符号 = 向き。+ 左 / − 右)
         self.asked = 0.0
         self.sent_stop = True
         self.pinged = 0.0
         threading.Thread(target=self._run, daemon=True).start()
 
-    def set(self, speed=None, face=None):
+    def _pkt(self, sp, fc, turn):
+        if turn or self.link.fw_at_least(0, 13, 6):
+            return packet(T_WALK, struct.pack("<bBBB", sp, 5, fc, 1 if turn else 0))
+        return packet(T_WALK, struct.pack("<bBB", sp, 5, fc))
+
+    def set(self, speed=None, face=None, turn=None):
         with self.lock:
+            if turn is not None:
+                if turn and not self.link.fw_at_least(0, 13, 6):
+                    raise RuntimeError("本体のファームを v0.13.6 以上にしてください (その場旋回)")
+                self.turn = bool(turn)
             if speed is not None:
                 self.speed = max(-100, min(100, int(speed)))
             if face is not None:
                 self.face = int(face) & 0xFF
             self.asked = time.monotonic()
             self.sent_stop = False
-            sp, fc = self.speed, self.face
-        self.link.send(packet(T_WALK, struct.pack("<bBB", sp, 5, fc)))   # すぐ1回 (反応を速く)
+            sp, fc, tn = self.speed, self.face, self.turn
+        self.link.send(self._pkt(sp, fc, tn))                            # すぐ1回 (反応を速く)
         return self.state()
 
     def stop(self):
-        return self.set(0)
+        return self.set(0, turn=False)
 
     def state(self):
-        return {"ok": True, "speed": self.speed, "face": self.face,
+        return {"ok": True, "speed": self.speed, "face": self.face, "turn": self.turn,
                 "walk": (self.link.status or {}).get("walk")}
 
     def _run(self):
@@ -572,7 +582,7 @@ class Walker:
                     log("walk: 頼み直しが来ないので止めます")
                     self.speed = 0
                 if not self.sent_stop:
-                    send = (self.speed, self.face)
+                    send = (self.speed, self.face, self.turn)
                     if not self.speed:
                         self.sent_stop = True       # 止まれは1回送れば良い (本体は期限切れでも止まる)
                 ping = now - self.asked < 3 and now - self.pinged > 0.5
@@ -581,7 +591,7 @@ class Walker:
             if not self.link.connected:
                 continue
             if send:
-                self.link.send(packet(T_WALK, struct.pack("<bBB", send[0], 5, send[1])))
+                self.link.send(self._pkt(*send))
             if ping:                                  # 歩かせている間は向き (ジャイロ) を細かく見る
                 self.link.send(packet(T_PING))
 
@@ -842,6 +852,7 @@ class Hub:
     RAMP_KEYS = ("wacc", "wdec")   # v0.13.3: 歩行の加速・減速 (ms)
     PULSE_KEYS = ("won", "woff")   # v0.13.4: 刻んで歩く (ms)
     SCAN_KEYS = ("tscan",)         # v0.13.5: 旋回スキャン (片道 ms、0 で中止)
+    TURN_KEYS = ("whead", "wheadth", "thalf")   # v0.13.6: まっすぐ補正・旋回の片道
     # v0.10 箱庭: hako は "auto"/"on"/"off"、chg/peek/deep/anymg は数、ほかは true/false
     HAKO_KEYS = ("hako", "chg", "hflip", "imuhi", "peek", "deep", "anymg", "plog", "hakoreset")
 
@@ -860,6 +871,8 @@ class Hub:
             raise RuntimeError("本体のファームを v0.13.4 以上にしてください (刻んで歩く)")
         if any(k in opt for k in self.SCAN_KEYS) and not self.link.fw_at_least(0, 13, 5):
             raise RuntimeError("本体のファームを v0.13.5 以上にしてください (旋回スキャン)")
+        if any(k in opt for k in self.TURN_KEYS) and not self.link.fw_at_least(0, 13, 6):
+            raise RuntimeError("本体のファームを v0.13.6 以上にしてください (旋回・まっすぐ補正)")
         def val(k, v):
             if k == "hako":
                 return v if v in ("auto", "on", "off") else ("on" if v is True else "off" if v is False else "auto")
@@ -868,7 +881,7 @@ class Hub:
             if isinstance(v, (int, float)):
                 return str(int(v))
             raise ValueError(f"{k} の値が変です")
-        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS + self.PULSE_KEYS + self.SCAN_KEYS if k in opt]
+        items = [f"{k}={val(k, opt[k])}" for k in self.CFG_KEYS + self.HAKO_KEYS + self.WALK_KEYS + self.PLED_KEYS + self.RAMP_KEYS + self.PULSE_KEYS + self.SCAN_KEYS + self.TURN_KEYS if k in opt]
         if not items:
             raise ValueError("設定がありません")
         return self.link.request(packet(T_CONFIG, ";".join(items).encode()), lambda j: "fw" in j, 4)
@@ -1142,7 +1155,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError("本体のファームを v0.12.0 以上にしてください (歩行)")
                 if j.get("speed"):
                     HUB.player.stop()                        # CPZ から流している絵は止める (顔と混ざらない)
-                return self._send(200, HUB.walker.set(j.get("speed"), j.get("face")))
+                return self._send(200, HUB.walker.set(j.get("speed"), j.get("face"), j.get("turn", False)))
             if path == "/api/walk/stop":
                 return self._send(200, HUB.walker.stop())
             return self._send(404, {"ok": False, "err": "not found"})

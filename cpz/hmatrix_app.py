@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.2"
+VERSION = "0.13.3"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -55,8 +55,8 @@ WALK_FACES = ["おまかせ", "ふつう", "にっこり", "びっくり", "ね�
 # v0.13 プログラム: [速さ % (+前 / −後), 秒] を順に。キーは英字 (F/X/Z/C は方向、P は編集なので使わない)
 PROG_KEYS = list("QWERTYUIOADGHJKLSVBNM")
 DEFAULT_PROGS = [
-    {"name": "右に回る(仮)", "key": "E", "rep": 3, "steps": [[60, 1.0], [-60, 0.2]]},
-    {"name": "左に回る(仮)", "key": "Q", "rep": 3, "steps": [[-60, 1.0], [60, 0.2]]},
+    {"name": "右に回る", "key": "E", "rep": 1, "steps": [[-110, 3.0]]},     # ±110 = その場旋回 (− 右 / + 左、v0.13.6〜)
+    {"name": "左に回る", "key": "Q", "rep": 1, "steps": [[110, 3.0]]},
     {"name": "ちょっと前", "key": "W", "rep": 1, "steps": [[40, 3.0]]},
     {"name": "ちょっと後ろ", "key": "S", "rep": 1, "steps": [[-40, 3.0]]},
 ]
@@ -186,6 +186,9 @@ class App:
         self.walk_view = "ctl"
         self.scan_half = int(c.get("wscanhalf", 250))
         self.progs = c.get("wprogs") or [dict(p, steps=[list(x) for x in p["steps"]]) for p in DEFAULT_PROGS]
+        for p in self.progs:                 # v0.13.2: 仮の旋回 (前 1.0 + 後 0.2) を本当の旋回に置き換える
+            if p.get("name") in ("右に回る(仮)", "左に回る(仮)") and len(p.get("steps", [])) == 2:
+                p.update(name=p["name"][:-3], rep=1, steps=[[-110 if p["name"].startswith("右") else 110, 3.0]])
         self.prog_i = 0; self.prog_run = None; self.del_armed = False
         self.edit = None; self.edit_row = 0; self.edit_field = 0
         self.msg = None; self.msg_until = 0
@@ -743,7 +746,7 @@ class App:
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
     WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
-                 "wdec", "wacc", "yawzero", "tscan", "tres1", "tres2"]
+                 "wdec", "wacc", "yawzero", "whead", "wheadth", "thalf", "tscan", "tres1", "tres2"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -765,6 +768,9 @@ class App:
                 "wdec": ("止まる時のゆっくり", f"{w['dec'] / 1000:.1f}秒" if "dec" in w else "要v0.13.3"),
                 "wacc": ("動き出しのゆっくり", f"{w['acc'] / 1000:.1f}秒" if "acc" in w else "要v0.13.3"),
                 "yawzero": ("向きを0に", "ENTER"),
+                "whead": ("まっすぐ補正", ("入" if w.get("head") else "切") if "head" in w else "要v0.13.6"),
+                "wheadth": ("補正を始めるずれ", f"{w.get('hth', 10)}°" if "hth" in w else "-"),
+                "thalf": ("旋回の片道", f"{w.get('thalf', 250)}ms" if "thalf" in w else "-"),
                 "tscan": ("旋回スキャン 片道", self.scan_label(w)),
                 "tres1": ("結果 1〜4 (°、+は左回り)", self.scan_res(w, 0)),
                 "tres2": ("結果 5〜8", self.scan_res(w, 4))}
@@ -792,7 +798,7 @@ class App:
 
     # 操作画面: 操作だけを大きく見せる
     def r_walk_ctl(self):
-        img, d = self.frame("歩く", "↑↓歩く SPC止 英字キー実行 TAB設定 P編集")
+        img, d = self.frame("歩く", "↑↓歩く ←→回る SPC止 英字ｷｰ TAB設定 P")
         dv = self.hub.st.get("dev") or {}
         w = dv.get("walk") or {}
         sp = self.walk["speed"]
@@ -805,7 +811,12 @@ class App:
             y0 = cy + s * 18
             d.polygon([(cx, y0 + s * 30), (cx - 26, y0 + s * 6), (cx - 11, y0 + s * 6), (cx - 11, y0),
                        (cx + 11, y0), (cx + 11, y0 + s * 6), (cx + 26, y0 + s * 6)], fill=col)
-        arrow(True, sp > 0); arrow(False, sp < 0)
+        turning = bool(self.walk.get("turn")) and sp != 0
+        arrow(True, sp > 0 and not turning); arrow(False, sp < 0 and not turning)
+        for sx, on in ((-1, turning and sp > 0), (1, turning and sp < 0)):      # ◀ 左旋回 / ▶ 右旋回
+            col = OKC if on else (64, 68, 82)
+            tx = cx + sx * 40
+            d.polygon([(tx + sx * 8, cy), (tx - sx * 6, cy - 12), (tx - sx * 6, cy + 12)], fill=col)
         d.ellipse((cx - 14, cy - 14, cx + 14, cy + 14), fill=(120, 40, 40) if not sp else (40, 42, 52),
                   outline=(200, 90, 90) if not sp else (90, 94, 108), width=2)
         d.text((cx - self.font_t.getlength("止") / 2, cy - 6), "止", fill=FG, font=self.font_t)
@@ -830,7 +841,10 @@ class App:
         d.line((ccx, ccy, ccx + (cr - 5) * math.sin(a), ccy - (cr - 5) * math.cos(a)), fill=ACC, width=3)
         d.ellipse((ccx - 3, ccy - 3, ccx + 3, ccy + 3), fill=ACC)
         d.text((ccx - 22, ccy + cr + 3), f"向き {yaw:+.0f}°", fill=SUB, font=self.font_t)
-        state = (run["p"]["name"] if run else "前進" if sp > 0 else "後退" if sp < 0 else "停止中")
+        state = (run["p"]["name"] if run else ("左へ回る" if sp > 0 else "右へ回る") if self.walk.get("turn") and sp
+                 else "前進" if sp > 0 else "後退" if sp < 0 else "停止中")
+        if w.get("hfix"):
+            state = "向きを直し中"
         d.text((140, 112), self.ellipsize(state, 70, self.font_s), fill=FG, font=self.font_s)
         bv = dv.get("batt")
         if isinstance(bv, int) and bv > 0:
@@ -871,8 +885,12 @@ class App:
         self.toast_draw(img)
         return img
 
+    @staticmethod
+    def step_word(s):
+        return "左旋回" if s > 100 else "右旋回" if s < -100 else "前" if s > 0 else "後" if s < 0 else "止"
+
     def prog_summary(self, p):
-        st = "+".join(f"{'前' if s > 0 else '後' if s < 0 else '止'}{t:.1f}" for s, t in p["steps"])
+        st = "+".join(f"{self.step_word(s)}{t:.1f}" for s, t in p["steps"])
         return (st + (f" ×{p['rep']}" if p.get("rep", 1) > 1 else ""))[:22]
 
     def edit_rows(self):
@@ -881,7 +899,7 @@ class App:
                 ("キー", p["key"]), ("くりかえし", f"{p['rep']}回")]
         for k, (s, t) in enumerate(p["steps"]):
             sel = self.edit_row == 3 + k
-            sv = f"{'前' if s > 0 else '後' if s < 0 else '止'}{abs(s)}%"
+            sv = self.step_word(s) if abs(s) > 100 else f"{self.step_word(s)}{abs(s)}%"
             tv = f"{t:.1f}秒"
             if sel:
                 sv, tv = (f"[{sv}]", tv) if self.edit_field == 0 else (sv, f"[{tv}]")
@@ -912,7 +930,7 @@ class App:
         now = time.time()
         self.walk_hold_code = None
         self.prog_run = {"i": i, "p": p, "si": 0, "loop": 0, "t_end": now + p["steps"][0][1], "t0": now, "total": total}
-        self.walk_send(int(p["steps"][0][0]))
+        self.step_send(int(p["steps"][0][0]))
 
     def prog_stop(self, send=True):
         if self.prog_run is not None:
@@ -933,13 +951,22 @@ class App:
                 return
         s, t = p["steps"][r["si"]]
         r["t_end"] = now + t
-        self.walk_send(int(s)); self.dirty = True
+        self.step_send(int(s)); self.dirty = True
 
-    def walk_send(self, speed=None):
-        """hub へ速さを頼む (待たない。裏で送る)"""
+    def step_send(self, s):
+        if abs(s) > 100:
+            self.walk_send(100 if s > 0 else -100, turn=True)
+        else:
+            self.walk_send(s)
+
+    def walk_send(self, speed=None, turn=None):
+        """hub へ速さを頼む (待たない。裏で送る)。turn=True はその場旋回 (+ 左 / − 右)"""
         if speed is not None:
             self.walk["speed"] = speed
-        body = {"speed": self.walk["speed"], "face": self.walk["face"]}
+            self.walk["turn"] = bool(turn) and speed != 0
+        elif turn is not None:
+            self.walk["turn"] = bool(turn)
+        body = {"speed": self.walk["speed"], "face": self.walk["face"], "turn": bool(self.walk.get("turn"))}
         self.walk_sent = time.time()
 
         def run():
@@ -968,6 +995,10 @@ class App:
             self.prog_stop(send=False)
             self.walk_hold_code = self.cur_code if self.walk_hold else None   # 離したら止める (run で見る)
             self.walk_send(self.walk["set"] if val == "UP" else -self.walk["set"]); return
+        if val in ("LEFT", "RIGHT"):                    # v0.13.2: その場旋回 (ファーム v0.13.6〜)
+            self.prog_stop(send=False)
+            self.walk_hold_code = self.cur_code if self.walk_hold else None
+            self.walk_send(100 if val == "LEFT" else -100, turn=True); return
         if (kind == "CHAR" and val == " ") or val == "BS":
             self.prog_stop(send=False); self.walk_hold_code = None
             self.walk_send(0); return
@@ -1034,6 +1065,13 @@ class App:
             cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})
         elif key == "yawzero":
             cfgcall({"yawzero": True}, "向きを 0 にしました")
+        elif key == "whead" and "head" in w:             # v0.13.6: まっすぐ補正
+            on = not w.get("head")
+            cfgcall({"whead": on}, f"まっすぐ補正: 向きが {w.get('hth', 10)}° ずれたら止まって戻します" if on else "まっすぐ補正を切りました")
+        elif key == "wheadth" and "hth" in w:
+            cfgcall({"wheadth": max(3, min(60, int(w.get("hth", 10)) + step * (5 if int(w.get("hth", 10)) >= 10 else 1)))})
+        elif key == "thalf" and "thalf" in w:
+            cfgcall({"thalf": max(100, min(800, int(w.get("thalf", 250)) + step * 50))})
         elif key == "tscan" and "scan" in w:             # v0.13.5: 旋回スキャン
             if val == "ENTER":
                 if (w.get("scan") or {}).get("st") == 1:
@@ -1112,8 +1150,8 @@ class App:
                 e["steps"].insert(k + 1, list(e["steps"][k])); self.edit_row += 1; return
             if kind == "CHAR" and val == "-" and len(e["steps"]) > 1:
                 e["steps"].pop(k); self.edit_row = min(self.edit_row, 3 + len(e["steps"]) - 1); return
-            if step and self.edit_field == 0:
-                e["steps"][k][0] = max(-100, min(100, int(e["steps"][k][0]) + step * 10))
+            if step and self.edit_field == 0:            # −110 右旋回 / −100〜100 歩く / 110 左旋回
+                e["steps"][k][0] = max(-110, min(110, int(e["steps"][k][0]) + step * 10))
             elif step:
                 e["steps"][k][1] = round(max(0.1, min(10.0, e["steps"][k][1] + step * 0.1)), 1)
             return
