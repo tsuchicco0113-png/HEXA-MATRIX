@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.1"
+VERSION = "0.13.2"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -184,6 +184,7 @@ class App:
         self.cur_code = None
         # v0.13: 操作画面 / 設定 / プログラム一覧 / プログラム編集
         self.walk_view = "ctl"
+        self.scan_half = int(c.get("wscanhalf", 250))
         self.progs = c.get("wprogs") or [dict(p, steps=[list(x) for x in p["steps"]]) for p in DEFAULT_PROGS]
         self.prog_i = 0; self.prog_run = None; self.del_armed = False
         self.edit = None; self.edit_row = 0; self.edit_field = 0
@@ -742,7 +743,7 @@ class App:
 
     # ---- 歩く (v0.11、ファーム v0.12〜)。v0.13: 操作画面 / 設定 / プログラム に分けた
     WALK_KEYS = ["speed", "hold", "gait", "won", "woff", "face", "wchar", "walker", "servo", "strim", "sinv", "wmax",
-                 "wdec", "wacc", "yawzero"]
+                 "wdec", "wacc", "yawzero", "tscan", "tres1", "tres2"]
 
     def walk_items(self):
         w = (self.hub.st.get("dev") or {}).get("walk")
@@ -763,8 +764,27 @@ class App:
                 "wmax": ("速さの上限", f"{w.get('max', 60)}%"),
                 "wdec": ("止まる時のゆっくり", f"{w['dec'] / 1000:.1f}秒" if "dec" in w else "要v0.13.3"),
                 "wacc": ("動き出しのゆっくり", f"{w['acc'] / 1000:.1f}秒" if "acc" in w else "要v0.13.3"),
-                "yawzero": ("向きを0に", "ENTER")}
+                "yawzero": ("向きを0に", "ENTER"),
+                "tscan": ("旋回スキャン 片道", self.scan_label(w)),
+                "tres1": ("結果 1〜4 (°、+は左回り)", self.scan_res(w, 0)),
+                "tres2": ("結果 5〜8", self.scan_res(w, 4))}
         return [rows[k] for k in self.WALK_KEYS]
+
+    def scan_label(self, w):
+        sc = w.get("scan")
+        if sc is None:
+            return "要v0.13.5"
+        if sc.get("st") == 1:
+            return f"測定中 {sc.get('n', 0)}/8"
+        return f"{self.scan_half}ms ENTERで開始"
+
+    def scan_res(self, w, i0):
+        sc = w.get("scan") or {}
+        r = sc.get("r") or []
+        n = sc.get("n", 0) if sc.get("st") == 1 else (8 if sc.get("st") == 2 else sc.get("n", 0))
+        if not r or not n:
+            return "-"
+        return " ".join(f"{r[i]:+.0f}" if i < n else "…" for i in range(i0, i0 + 4))
 
     def r_walk(self):
         return {"ctl": self.r_walk_ctl, "set": self.r_walk_set, "prog": self.r_walk_prog,
@@ -1014,6 +1034,15 @@ class App:
             cfgcall({key: max(0, min(3000, (cur + 50) // 100 * 100 + step * 100))})
         elif key == "yawzero":
             cfgcall({"yawzero": True}, "向きを 0 にしました")
+        elif key == "tscan" and "scan" in w:             # v0.13.5: 旋回スキャン
+            if val == "ENTER":
+                if (w.get("scan") or {}).get("st") == 1:
+                    cfgcall({"tscan": 0}, "スキャンをやめました")
+                else:
+                    cfgcall({"tscan": self.scan_half}, "床に置いて約30秒。往復して回るか測ります (歩く操作でやめる)")
+            else:
+                self.scan_half = max(100, min(800, self.scan_half + step * 50))
+                c = load_cfg(); c["wscanhalf"] = self.scan_half; save_cfg(c)
 
     def k_walk_prog(self, kind, val):
         n = len(self.progs)

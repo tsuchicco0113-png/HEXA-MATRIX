@@ -95,6 +95,8 @@
 //   v0.13.2: 緑の電源 LED (M5PM1 LED_EN) を消せる設定 pled (CONFIG pled=0)。M5Unified は起動のたびに点けるので起動後に毎回反映
 //   v0.13.3: 歩行の加速・減速をゆっくりに (wacc / wdec ms)。前寄りの重心で、止まる時の慣性で前に倒れるのを防ぐ
 //   v0.13.4: 刻んで歩く (won / woff ms)。続けて回すと曲がる個体で、ボタン連打と同じ「動く→休む」をくり返す
+//   v0.13.5: 旋回スキャン (CONFIG tscan=<片道 ms>)。クランクを前後に往復させ、位相を 1/8 ずつ送りながら 8 回、
+//            ジャイロで回った角度を測る。FS90R は位置が読めないので、その場で回れる位相があるかを実機で確かめる試験
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <SPI.h>
@@ -117,7 +119,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.13.4";
+static const char* FW_VER = "0.13.5";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -145,6 +147,14 @@ static int8_t     servoPinOn = -1;     // いまパルスを出すのにつな�
 static uint16_t   servoUs = 0;         // いま出しているパルス (0 = 出していない)
 static uint32_t   walkIdleAt = 0;      // 止まった時刻 (ねむい顔)
 static float      yawDeg = 0.f, yawRate = 0.f;
+// v0.13.5: 旋回スキャン (往復させて回るかを位相ごとに測る)
+static const int  SCAN_N = 8, SCAN_SWINGS = 10;
+static uint8_t    scanSt = 0;           // 0 なし / 1 実行中 / 2 済み / 3 中止
+static uint16_t   scanHalf = 250;       // 片道 ms
+static int8_t     scanTrial = 0, scanPhase = 0;   // phase: 0 落ち着く / 1 往復 / 2 測る / 3 位相送り
+static int16_t    scanSwing = 0;
+static uint32_t   scanAt = 0;
+static float      scanYaw0 = 0.f, scanRes[SCAN_N];
 static bool       cfgWalkChar = false; // おまかせの顔を箱庭のキャラにする
 static bool       wchOn = false;       // 歩行中にキャラを動かしている
 static bool       wchReady = false;    // キャラを用意した (起動してから1回)
@@ -350,10 +360,12 @@ static void sendStatus() {
   // v0.12: 歩行
   out->printf("\"walk\":{\"walker\":%d,\"pin\":%d,\"trim\":%d,\"inv\":%d,\"max\":%u,\"spd\":%d,\"us\":%u,"
               "\"show\":%d,\"face\":%u,\"wchar\":%d,\"cst\":%d,\"cmds\":%lu,\"tmo\":%lu,\"yaw\":%.1f,\"wz\":%.1f,"
-              "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u}}\n",
+              "\"acc\":%u,\"dec\":%u,\"out\":%d,\"pon\":%u,\"poff\":%u,"
+              "\"scan\":{\"st\":%u,\"half\":%u,\"n\":%d,\"r\":[%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f]}}}\n",
               cfgWalker ? 1 : 0, (int)wcfg.pin, (int)wcfg.trim, wcfg.inv ? 1 : 0, wcfg.maxPct, (int)walk.spd, servoUs,
               walkShow ? 1 : 0, walk.face, cfgWalkChar ? 1 : 0, wchOn ? (int)hako.st : -1, (unsigned long)walk.cmds, (unsigned long)walk.timeouts, yawDeg, yawRate,
-              wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff);
+              wcfg.accMs, wcfg.decMs, (int)lroundf(walk.out), wcfg.pulseOn, wcfg.pulseOff,
+              scanSt, scanHalf, scanTrial, scanRes[0], scanRes[1], scanRes[2], scanRes[3], scanRes[4], scanRes[5], scanRes[6], scanRes[7]);
 }
 static void sendErr(const char* e) { out->printf("{\"ok\":false,\"err\":\"%s\"}\n", e); }
 static uint64_t freeBytes() {
@@ -790,6 +802,49 @@ static void servoWrite(uint16_t us) {
   servoUs = us;
 }
 static void walkOut(uint32_t now);
+static void scanStop(uint8_t st) {
+  if (scanSt != 1) return;
+  scanSt = st;
+  if (servoUs) servoWrite(hxm_walk_us(wcfg, 0));
+  walk.command(0, 5, 0xFF, millis());                 // 中立 0.3 秒 → パルスを止める (いつもと同じ)
+}
+/// 旋回スキャン 1 歩ぶん。全力 (wmax を無視) で前後に往復させ、終わったら位相を 1/8 周送る
+static void scanTick(uint32_t now) {
+  if (scanSt != 1) return;
+  HxmWalkCfg full = wcfg; full.maxPct = 100;
+  uint32_t el = now - scanAt;
+  switch (scanPhase) {
+    case 0:                                            // 落ち着く (0.4 秒中立)
+      if (el >= 400) { scanYaw0 = yawDeg; scanSwing = 0; scanPhase = 1; scanAt = now; servoWrite(hxm_walk_us(full, 100)); }
+      break;
+    case 1:                                            // 往復: 前 half → 後 half → …
+      if (el >= scanHalf) {
+        scanSwing++; scanAt = now;
+        if (scanSwing >= SCAN_SWINGS) { servoWrite(hxm_walk_us(full, 0)); scanPhase = 2; }
+        else servoWrite(hxm_walk_us(full, (scanSwing & 1) ? -100 : 100));
+      }
+      break;
+    case 2:                                            // 止まってから測る
+      if (el >= 300) {
+        scanRes[scanTrial] = yawDeg - scanYaw0;
+        scanTrial++;
+        if (scanTrial >= SCAN_N) { scanSt = 2; walk.command(0, 5, 0xFF, now); break; }
+        scanPhase = 3; scanAt = now; servoWrite(hxm_walk_us(full, 100));
+      }
+      break;
+    case 3:                                            // 位相送り: 片道の半分 (= 往復の幅の 1/2 ≒ 1/8 周) だけ前へ
+      if (el >= (uint32_t)scanHalf / 2) { servoWrite(hxm_walk_us(full, 0)); scanPhase = 0; scanAt = now; }
+      break;
+  }
+}
+static void scanStart(uint16_t half) {
+  if (!cfgWalker || wcfg.pin < 0) return;
+  scanHalf = half < 100 ? 100 : half > 800 ? 800 : half;
+  for (int i = 0; i < SCAN_N; i++) scanRes[i] = 0.f;
+  scanTrial = 0; scanPhase = 0; scanAt = millis(); scanSt = 1;
+  walk.halt(); walk.pulsing = true; walk.moving = false;
+  servoWrite(hxm_walk_us(wcfg, 0));
+}
 /// Grove の 5V (サーボの電源)。歩くロボットの時だけ入れる
 static void walkPower() {
   if (M5.getBoard() != m5::board_t::board_M5CoreMatrix) return;
@@ -797,6 +852,7 @@ static void walkPower() {
 }
 /// 止める。hide=true なら顔も消す (番組・ライブ・消灯へ移る時)
 static void walkStop(bool hide) {
+  scanStop(3);
   if (walk.moving || walk.pulsing) {
     walk.command(0, 5, 0xFF, millis());
     walk.pulsing = false;
@@ -850,6 +906,7 @@ static void walkDraw(uint32_t now) {
 static void handleWalk() {
   if (pk->len != 3) { sendErr("walk len"); return; }
   uint32_t now = millis();
+  scanStop(3);                                       // v0.13.5: 歩く指令が来たらスキャンはやめる
   if (!walkShow) {                                   // 番組・ライブ・一時再生は止めて顔へ
     stopProgramForExternal();
     live = false; clipMode = false; needRestore = false; holdUntil = 0;
@@ -886,6 +943,7 @@ static void walkTick(uint32_t now) {
     }
     yawAt = now;
   }
+  if (scanSt == 1) { scanTick(now); walk.rampAt = now; return; }   // v0.13.5: スキャン中はスキャンだけ
   if (walk.tick(now)) walkIdleAt = now;               // 期限切れ: 指令を 0 に (速さは walkOut でゆっくり落とす)
   if (walk.pulsing) walkOut(now); else walk.rampAt = now;
   if (!walk.moving && !walk.pulsing && servoUs) servoWrite(0);
@@ -1018,6 +1076,7 @@ static void handleConfig() {
       else if (!strcmp(k, "sinv")) { wcfg.inv = on; prefs.putBool("winv", on); }
       else if (!strcmp(k, "wmax")) { int n = atoi(v); wcfg.maxPct = (uint8_t)(n < 10 ? 10 : n > 100 ? 100 : n); prefs.putUChar("wmax", wcfg.maxPct); }
       else if (!strcmp(k, "wacc")) { int n = atoi(v); wcfg.accMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wacc", wcfg.accMs); }
+      else if (!strcmp(k, "tscan")) { int n = atoi(v); if (n > 0) scanStart((uint16_t)n); else scanStop(3); }
       else if (!strcmp(k, "won"))  { int n = atoi(v); wcfg.pulseOn  = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("won", wcfg.pulseOn); }
       else if (!strcmp(k, "woff")) { int n = atoi(v); wcfg.pulseOff = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("woff", wcfg.pulseOff); }
       else if (!strcmp(k, "wdec")) { int n = atoi(v); wcfg.decMs = (uint16_t)(n < 0 ? 0 : n > 3000 ? 3000 : n); prefs.putUShort("wdec", wcfg.decMs); }

@@ -63,6 +63,7 @@ def walk_now():
     now = time.monotonic()
     if fwv() >= (0, 13, 3): WALK.setdefault("acc", 300); WALK.setdefault("dec", 900)
     if fwv() >= (0, 13, 4): WALK.setdefault("pon", 0); WALK.setdefault("poff", 0)
+    if fwv() >= (0, 13, 5): WALK.setdefault("scan", {"st": 0, "half": 250, "n": 0, "r": [0] * 8})
     if WALK["spd"] and now > WALK_T[0]: WALK["spd"] = 0; WALK["us"] = 0; WALK["tmo"] += 1
     return dict(WALK)
 def names(): return sorted(FILES)
@@ -96,6 +97,9 @@ def handle(t, p):
             elif k == "strim" and fwv() >= (0, 12, 0): WALK["trim"] = max(-150, min(150, int(v)))
             elif k == "wmax" and fwv() >= (0, 12, 0): WALK["max"] = max(10, min(100, int(v)))
             elif k in ("wacc", "wdec") and fwv() >= (0, 13, 3): WALK[k[1:]] = max(0, min(3000, int(v)))
+            elif k == "tscan" and fwv() >= (0, 13, 5):
+                WALK["scan"] = {"st": 2 if int(v) > 0 else 3, "half": int(v) or 250, "n": 8,
+                                "r": [12, -3, 40, 85, 20, -15, -60, -25]}
             elif k in ("won", "woff") and fwv() >= (0, 13, 4): WALK["pon" if k == "won" else "poff"] = max(0, min(3000, int(v)))
             elif k == "strimtest" and fwv() >= (0, 12, 0): pass
             elif k == "yawzero" and fwv() >= (0, 12, 0): WALK["yaw"] = 0.0; return out({"ok": True, "hakoev": False, "yaw": 0.0})
