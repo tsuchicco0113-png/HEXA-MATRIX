@@ -39,7 +39,7 @@ sys.path.insert(0, HERE)
 from cpzui import (BG, FG, LCD_H, LCD_W, SUB, find_font, glow_hex, hexpts,  # noqa: E402
                    honeycomb_bg, nav)
 
-VERSION = "0.13.8"
+VERSION = "0.13.9"
 ACC = (255, 176, 46)                 # HEXA MATRIX の強調色 (琥珀。HEXA CLIP の緑と見分ける)
 DIM = (70, 52, 20)
 OKC, NGC = (47, 214, 123), (255, 110, 110)
@@ -1086,6 +1086,25 @@ class App:
             for i, p in enumerate(self.progs):
                 if p["key"].lower() == val.lower():
                     self.prog_start(i); return
+            if val.lower() in self.FX_KEYS:               # v0.13.9: Z 波動 / X 昇竜 (プログラムに同じキーがあればそちら)
+                self.fx_play(self.FX_KEYS[val.lower()]); return
+
+    FX_KEYS = {"z": "hadou", "x": "shoryu"}
+
+    def fx_play(self, name):
+        if self.hub.st.get("fx") is None:
+            self.toast("ハブを v0.13.9 以上にしてください", 3, ok=False); return
+        def done(r):
+            if not r.get("sound"):
+                self.toast(f"音がありません: ~/.config/hexa-matrix/sounds/{name}.wav", 4, ok=False)
+        threading.Thread(target=lambda: self._fx_call(name, done), daemon=True).start()
+
+    def _fx_call(self, name, done):
+        try:
+            r = self.hub.call("POST", "/api/fx", {"name": name}, timeout=3)
+            done(r or {})
+        except Exception as e:
+            self.toast(str(e), 3, ok=False)
 
     def k_walk_set(self, kind, val):
         if val == "ESC":

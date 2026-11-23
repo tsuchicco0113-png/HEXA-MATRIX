@@ -109,6 +109,8 @@
 //            起動時には勝手に動かさない (机の上から落ちる)。ジャイロの見張り: 読めない 0.5 秒 / 値が固まって 1.5 秒で
 //            「ジャイロなし」とみなし、旋回・まっすぐ補正・スキャンは止めて前後に歩くのだけ続ける (FS90R は位置が読めないので
 //            ジャイロ無しでは旋回の向きが決まらない。時間だけで回すと逆へ回ったり回らなかったりするので、やらない)
+//   v0.14.1: エフェクト FX (0x09): [1コマ ms/10][最後のコマを残す ms/10][16x16 の絵 32 バイト × 1〜7]。いまの絵の上に一瞬だけ
+//            重ねて出し、終わったら元に戻す。歩く・旋回は止めない (CPZ のアケコンのボタンで音と一緒に出す)
 //   v0.13.9: 旋回の位置の覚え書き: 左右を続けて切り替える時は前に回れた所へ直接行く。左の当たりと右の当たりの距離を覚えて
 //            本体に保存し (toff)、探している最中に逆の当たりにいると分かったらその距離だけ一気に送る (左回りの立ち上がりを速く)
 #include <M5Unified.h>
@@ -133,7 +135,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 
-static const char* FW_VER = "0.14.0";
+static const char* FW_VER = "0.14.1";
 static const char* DIR = "/hexa";
 static const char* TMP = "/hexa/upload.tmp";
 static const int   MAXF = 64;
@@ -285,6 +287,11 @@ static bool     pfOnce = false;        // この番組は1回だけ流す (.hxm 
 static int      cur = 0;
 static bool     paused = true;         // true = 番組を流していない (起動時はこちら)
 static uint32_t nextAt = 0, holdUntil = 0;
+// v0.14.1: エフェクト (重ねて一瞬出す絵)
+static uint8_t  fxBuf[7][32];
+static uint8_t  fxN = 0, fxI = 0;
+static uint16_t fxMs = 70;
+static uint32_t fxAt = 0, fxCount = 0;
 static bool     needRestore = false;
 static uint8_t  masterIdx = 3;
 static int      outBri = -1;
@@ -319,12 +326,12 @@ static void setOut(int b) {
   outBri = b;
   M5.Display.setBrightness((uint8_t)b);
 }
-static void drawFrame() {
+static void drawBits(const uint8_t* f) {
   uint32_t t0 = micros();
   M5.Display.startWrite();
   M5.Display.fillScreen(TFT_BLACK);
   for (int y = 0; y < 16; y++) {
-    uint16_t w = ((uint16_t)frame[y * 2] << 8) | frame[y * 2 + 1];
+    uint16_t w = ((uint16_t)f[y * 2] << 8) | f[y * 2 + 1];
     for (int x = 0; x < 16; x++)
       if (w & (0x8000 >> x)) M5.Display.drawPixel(x, y, TFT_WHITE);
   }
@@ -332,6 +339,7 @@ static void drawFrame() {
   M5.Display.display();
   lastDrawUs = micros() - t0;
 }
+static void drawFrame() { drawBits(frame); }
 static void rowsToFrame(const uint16_t* rows) {
   for (int y = 0; y < 16; y++) { frame[y * 2] = rows[y] >> 8; frame[y * 2 + 1] = rows[y] & 0xFF; }
 }
@@ -942,6 +950,24 @@ static void walkDraw(uint32_t now) {
   for (int y = 0; y < 16; y++) { nf[y * 2] = rows[y] >> 8; nf[y * 2 + 1] = rows[y] & 0xFF; }
   if (memcmp(nf, frame, 32)) { memcpy(frame, nf, 32); setOut(MASTER_LV[masterIdx]); drawFrame(); }
 }
+/// v0.14.1: FX (0x09) [1コマ ms/10][残す ms/10][絵 32×n]
+static void handleFx() {
+  int n = ((int)pk->len - 2) / 32;
+  if (pk->len < 34 || ((int)pk->len - 2) % 32 || n > 7) { sendErr("fx len"); return; }
+  for (int i = 0; i < n; i++) memcpy(fxBuf[i], pk->buf + 2 + i * 32, 32);
+  fxN = (uint8_t)n; fxI = 0; fxMs = (uint16_t)(pk->buf[0] ? pk->buf[0] : 7) * 10;
+  uint32_t now = millis();
+  fxAt = now; fxCount++;
+  holdUntil = now + (uint32_t)fxMs * n + (uint32_t)pk->buf[1] * 10;   // この間は元の絵 (顔) を描かない
+  needRestore = true;
+  setOut(MASTER_LV[masterIdx]);
+  drawBits(fxBuf[0]);
+}
+static void fxTick(uint32_t now) {
+  if (!fxN) return;
+  if ((int32_t)(now - holdUntil) >= 0) { fxN = 0; return; }   // 終わり: 元の絵へは needRestore で戻る
+  if (fxI + 1 < fxN && (int32_t)(now - fxAt) >= (int32_t)fxMs) { fxI++; fxAt = now; drawBits(fxBuf[fxI]); }
+}
 /// WALK (0x08)
 static void handleWalk() {
   if (pk->len != 3 && pk->len != 4) { sendErr("walk len"); return; }
@@ -1273,6 +1299,7 @@ static void handlePacket() {
       return;
     case HXM_CONFIG: handleConfig(); return;
     case HXM_WALK:  if (!hakoOn) handleWalk(); return;   // 連続で来るので返事はしない
+    case HXM_FX:    if (!hakoOn) handleFx(); return;     // v0.14.1: 返事はしない
     case HXM_PING:  sendStatus(); return;
     case HXM_BENCH: bench(); return;
     default:
@@ -1621,6 +1648,7 @@ void loop() {
   }
   if (clipMode) clipTick(); else playTick();
   imuTick(now);
+  fxTick(now);                                             // v0.14.1
   walkTick(now);                                           // v0.12
   // v0.9.6: 何も出していない (消灯) 状態
   const bool showing = live || clipMode || !paused || up.active || walkShow;

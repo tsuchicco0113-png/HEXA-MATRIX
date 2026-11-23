@@ -32,6 +32,7 @@ APP_CFG = os.path.join(CFG_DIR, "app.json")
 ACTIONS = [
     ("prog1", "プログラム 1"), ("prog2", "プログラム 2"), ("prog3", "プログラム 3"), ("prog4", "プログラム 4"),
     ("face_next", "顔 次へ"), ("face_prev", "顔 前へ"), ("speed", "速さ 切り替え"), ("stop", "止める"),
+    ("fx_hadou", "波動拳 (音+HIT)"), ("fx_shoryu", "昇竜拳 (音+HIT)"),        # v0.13.9 ハブ: エフェクト
 ]
 SPEEDS = [40, 60, 80, 100]
 N_FACES = 7          # アプリの WALK_FACES と同じ (0 = おまかせ … 6 = 箱庭のキャラ)
@@ -71,8 +72,9 @@ def eviocgabs(code):
 
 
 class Pad:
-    def __init__(self, walker, before_walk=None, log=print, finder=find_pads):
+    def __init__(self, walker, before_walk=None, log=print, finder=find_pads, fx=None):
         self.walker = walker
+        self.fx = fx                            # v0.13.9: fx(name) で音と絵を出す
         self.before_walk = before_walk          # 歩く前に呼ぶ (CPZ から流している絵を止める)
         self.log = log
         self.finder = finder
@@ -265,6 +267,13 @@ class Pad:
         self.sent = time.time()
 
     def do(self, act):
+        if act.startswith("fx_"):
+            if self.fx:
+                try:
+                    self.fx(act[3:])
+                except Exception as e:
+                    self.err = str(e)
+            return
         if act == "stop":
             self.prog = None
             self._go(0, 0)

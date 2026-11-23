@@ -41,7 +41,7 @@
 #pragma once
 #include <stdint.h>
 
-enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06, HXM_CONFIG = 0x07, HXM_WALK = 0x08,
+enum : uint8_t { HXM_FRAME = 0x01, HXM_BRIGHT = 0x02, HXM_PING = 0x03, HXM_ROTATE = 0x04, HXM_BENCH = 0x05, HXM_AUTH = 0x06, HXM_CONFIG = 0x07, HXM_WALK = 0x08, HXM_FX = 0x09,
                  HXM_FILE_BEGIN = 0x10, HXM_FILE_DATA = 0x11, HXM_FILE_END = 0x12,
                  HXM_LIST = 0x13, HXM_DELETE = 0x14, HXM_PLAY = 0x15 };
 static const uint8_t HXM_MAX_PAYLOAD = 240;

@@ -50,7 +50,7 @@ Wants=network-online.target
 
 [Service]
 User=$U
-SupplementaryGroups=dialout input
+SupplementaryGroups=dialout input audio
 Environment=HMATRIX_PORT=$PORT
 ExecStart=/usr/bin/python3 $DIR/hmatrixd.py
 Restart=on-failure

@@ -124,6 +124,10 @@ def handle(t, p):
     if t == 6:
         if not KEY or p.decode() == KEY: authed = True; return out({"ok": True, "auth": True})
         err("auth"); raise ConnectionAbortedError
+    if t == 9 and fwv() >= (0, 14, 1):           # FX: 返事はしない
+        n = (len(p) - 2) // 32
+        if len(p) < 34 or (len(p) - 2) % 32 or n > 7: return err("fx len")
+        open("/tmp/fakecm.frames", "a").write(f"{time.monotonic():.3f} FX n={n} ms={p[0]*10} hold={p[1]*10}\n"); return
     if t == 8 and fwv() >= (0, 12, 0):           # WALK: 返事はしない
         sp = struct.unpack("<b", p[:1])[0]; ttl = p[1] or 5
         WALK["cmds"] += 1; WALK["spd"] = max(-WALK["max"], min(WALK["max"], sp)); WALK["show"] = 1

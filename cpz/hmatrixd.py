@@ -40,8 +40,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import hxengine as H  # noqa: E402
 import hmatrix_pad  # noqa: E402  v0.13.7: アケコン / ゲームパッド
+import hmatrix_fx  # noqa: E402  v0.13.9: エフェクト (音 + 絵)
 
-VERSION = "0.13.8"
+VERSION = "0.13.9"
 NET_PORT = 7800          # CoreMatrix (ファーム v0.5〜) が Wi-Fi で待ち受けるポート
 HOME = os.path.expanduser("~")
 DEF_LIB = os.path.join(HOME, ".local", "share", "hexa-matrix", "library")
@@ -50,6 +51,7 @@ STUDIO_CANDIDATES = [os.path.join(HERE, "..", "hexa-matrix-studio.html"),
 
 T_FRAME, T_BRIGHT, T_PING, T_ROTATE, T_BENCH, T_AUTH, T_CONFIG = 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
 T_WALK = 0x08            # 歩行 (ファーム v0.12〜): int8 速さ% / u8 有効時間(0.1秒) / u8 顔
+T_FX = 0x09              # エフェクト (ファーム v0.14.1〜): u8 1コマ(10ms) / u8 残す(10ms) / 絵 32×1〜7
 T_BEGIN, T_DATA, T_END, T_LIST, T_DEL, T_PLAY = 0x10, 0x11, 0x12, 0x13, 0x14, 0x15
 CHUNK = 200
 WIN_MAX = 16             # 返事を待たずに先へ送る DATA の数の上限 (本体が PING の "win" で教えてくれる、v0.9.5〜)
@@ -612,6 +614,7 @@ class Hub:
         self.web_last = 0.0          # ブラウザ(ws)から最後に送られた時刻
         self.last_say = None
         self.pad = None              # v0.13.7: アケコン (main で始める)
+        self.fx = None               # v0.13.9: エフェクト (main で作る)
 
     # ---- ライブラリ
     def lib_items(self):
@@ -948,7 +951,8 @@ class Hub:
                 "port": self.link.path, "link": self.link.kind, "dev": self.link.status, "player": p.state(),
                 "frame": p.frame.hex(), "bri": p.bri, "busy": self.busy,
                 "web": time.time() - self.web_last < 5, "ip": local_ip(),
-                "pad": self.pad.status() if self.pad else None}
+                "pad": self.pad.status() if self.pad else None,
+                "fx": self.fx.status() if self.fx else None}
 
 
 def local_ip():
@@ -1167,6 +1171,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, HUB.walker.set(j.get("speed"), j.get("face"), j.get("turn", False)))
             if path == "/api/walk/stop":
                 return self._send(200, HUB.walker.stop())
+            if path == "/api/fx":                            # {"name": "hadou" / "shoryu"} 音を鳴らして本体に HIT の絵
+                return self._send(200, dict(ok=True, **HUB.fx.play(str(j.get("name", "")))))
             if path == "/api/pad/learn":                     # {"action": "prog1" など / null でやめる} 次に押したボタンを覚える
                 return self._send(200, dict(ok=True, pad=HUB.pad.set_learn(j.get("action"))))
             if path == "/api/pad/clear":                     # {"action": ...} 割り当てを消す
@@ -1282,7 +1288,8 @@ def main():
     def before_walk():
         if HUB.player.job is not None:
             HUB.player.stop()                    # CPZ から流している絵は止める (顔と混ざらない)
-    HUB.pad = hmatrix_pad.Pad(HUB.walker, before_walk, log).start()
+    HUB.fx = hmatrix_fx.Fx(lambda pl: HUB.link.send(packet(T_FX, pl)), lambda: HUB.link.fw_at_least(0, 14, 1), log)
+    HUB.pad = hmatrix_pad.Pad(HUB.walker, before_walk, log, fx=HUB.fx.play).start()
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     srv.daemon_threads = True
     log(f"HEXA MATRIX hub {VERSION}  http://{local_ip()}:{a.port}/  library: {a.lib}")
